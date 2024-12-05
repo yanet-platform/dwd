@@ -1,0 +1,21 @@
+[package]
+name = "dwd"
+version = "0.1.1"
+edition = "2021"
+publish = true
+description = "High performance traffic generator"
+license-file = "LICENSE"
+repository = "https://github.com/yanet-platform/dwd"
+
+[dependencies]
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["rt", "net", "time", "macros", "sync"] }
+clap = { version = "4.5", features = ["derive"] }
+ratatui = "0.29.0"
+crossterm = { version = "0.28.1", features = ["event-stream"] } # TODO: event-stream is needed?
+futures = "0.3.31"
+
+[profile.release]
+panic = "abort"

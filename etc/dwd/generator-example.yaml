@@ -1,0 +1,5 @@
+type: seq
+generators:
+  - type: line
+    rps: [0, 100000]
+    duration: 60
