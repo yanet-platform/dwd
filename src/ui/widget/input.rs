@@ -1,8 +1,8 @@
 use ratatui::{
-    layout::{Constraint, Layout, Position, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Span, Text},
-    widgets::{Block, Paragraph},
+    text::{Line, Span},
+    widgets::Block,
     Frame,
 };
 
@@ -40,11 +40,13 @@ impl InputWidget {
             .horizontal_margin(2)
             .vertical_margin(1)
             .areas(area);
+        let [input, cursor] =
+            Layout::horizontal([Constraint::Length(self.value.len() as u16), Constraint::Length(1)]).areas(area);
 
-        let text = Text::from(self.value.as_str()).patch_style(Style::default().add_modifier(Modifier::RAPID_BLINK));
-        let widget = Paragraph::new(text).style(Style::default().fg(Color::Yellow));
+        let line = Line::from(self.value.as_str()).style(Style::default().fg(Color::Yellow));
+        let line_cursor: Line<'_> = Line::from("█");
 
-        frame.set_cursor_position(Position::new(area.x + self.value.len() as u16, area.y));
-        frame.render_widget(widget, area);
+        frame.render_widget(line, input);
+        frame.render_widget(line_cursor, cursor);
     }
 }
