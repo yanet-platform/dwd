@@ -1,9 +1,7 @@
 //! TODO:
-//! 1. Fix shaper to be work with DPDK, or fall back to per-thread.
-//! 2. Refactor DPDK worker.
-//! 3. Refactor DPDK library.
-//! 4. Make UI configurable. Better to hide <S>.
-//! 5. Try different logging libraries. How to combine it with UI?
+//! 1. Refactor DPDK worker.
+//! 2. Refactor DPDK library.
+//! 3. Try different logging libraries. How to combine it with UI?
 
 use core::error::Error;
 
