@@ -5,6 +5,17 @@ use core::{
     num::NonZero,
 };
 
+#[cfg(feature = "dpdk")]
+use {
+    crate::{
+        cmd::DpdkCmd,
+        worker::dpdk::{Config as DpdkWorkerConfig, PciDeviceName, PortConfig},
+    },
+    dpdk::cpu::CoreId,
+    serde::Deserialize,
+    std::{collections::HashMap, fs},
+};
+
 use crate::{
     cmd::{Cmd, ModeCmd, NativeLoadCmd, UdpCmd},
     generator::{self, Generator, LineGenerator},
@@ -44,6 +55,8 @@ impl TryFrom<Cmd> for Config {
 #[derive(Debug, Clone)]
 pub enum ModeConfig {
     Udp(UdpConfig),
+    #[cfg(feature = "dpdk")]
+    Dpdk(DpdkConfig),
 }
 
 impl TryFrom<ModeCmd> for ModeConfig {
@@ -52,6 +65,8 @@ impl TryFrom<ModeCmd> for ModeConfig {
     fn try_from(v: ModeCmd) -> Result<Self, Self::Error> {
         let m = match v {
             ModeCmd::Udp(v) => Self::Udp(v.try_into()?),
+            #[cfg(feature = "dpdk")]
+            ModeCmd::Dpdk(v) => Self::Dpdk(v.try_into()?),
         };
 
         Ok(m)
@@ -104,6 +119,38 @@ impl TryFrom<NativeLoadCmd> for NativeLoadConfig {
         let NativeLoadCmd { threads, requests_per_socket } = cmd;
 
         let m = Self { threads, requests_per_socket };
+
+        Ok(m)
+    }
+}
+
+#[cfg(feature = "dpdk")]
+#[derive(Debug, Clone)]
+pub struct DpdkConfig(DpdkWorkerConfig);
+
+#[cfg(feature = "dpdk")]
+impl DpdkConfig {
+    #[inline]
+    pub fn into_inner(self) -> DpdkWorkerConfig {
+        self.0
+    }
+}
+
+#[cfg(feature = "dpdk")]
+impl TryFrom<DpdkCmd> for DpdkConfig {
+    type Error = Box<dyn Error>;
+
+    fn try_from(v: DpdkCmd) -> Result<Self, Self::Error> {
+        #[derive(Deserialize)]
+        struct Cfg {
+            master_lcore: CoreId,
+            ports: HashMap<PciDeviceName, PortConfig>,
+        }
+
+        let data = fs::read(&v.dpdk_path)?;
+        let cfg: Cfg = serde_yaml::from_slice(&data)?;
+
+        let m = Self(DpdkWorkerConfig::new(cfg.master_lcore, cfg.ports, v.pcap_path));
 
         Ok(m)
     }

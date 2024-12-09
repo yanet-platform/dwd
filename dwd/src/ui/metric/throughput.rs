@@ -6,20 +6,21 @@ use std::time::Instant;
 
 use super::Metric;
 
-pub struct Throughput<S> {
-    f: Box<dyn Fn(&S) -> u64>,
+pub struct Throughput {
+    f: Box<dyn Fn() -> u64 + Send>,
     prev_v: u64,
     prev_ts: Instant,
     value: (f64, char),
 }
 
-impl<S> Throughput<S> {
-    pub fn new<F>(f: F) -> Self
+impl Throughput {
+    pub fn new<F, S>(f: F, stat: S) -> Self
     where
-        F: Fn(&S) -> u64 + 'static,
+        F: Fn(&S) -> u64 + Send + 'static,
+        S: Send + 'static,
     {
         Self {
-            f: Box::new(f),
+            f: Box::new(move || f(&stat)),
             prev_v: 0,
             prev_ts: Instant::now(),
             value: (0.0, ' '),
@@ -36,7 +37,7 @@ impl<S> Throughput<S> {
     }
 }
 
-impl<S> Display for Throughput<S> {
+impl Display for Throughput {
     #[inline]
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         let (rate, prefix) = self.value;
@@ -45,11 +46,11 @@ impl<S> Display for Throughput<S> {
     }
 }
 
-impl<S> Metric<S> for Throughput<S> {
-    fn update(&mut self, stat: &S) {
+impl Metric for Throughput {
+    fn update(&mut self) {
         let now = Instant::now();
 
-        let v = (self.f)(stat);
+        let v = (self.f)();
         let dv = (v.saturating_sub(self.prev_v) * 8) as f64;
         let dt = now.duration_since(self.prev_ts).as_secs_f64();
         let rate = dv / dt;

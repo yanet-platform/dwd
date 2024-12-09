@@ -6,6 +6,7 @@ mod shaper;
 mod stat;
 mod ui;
 mod worker;
+pub mod logging;
 
 /// Thread-safe producing iterators.
 ///

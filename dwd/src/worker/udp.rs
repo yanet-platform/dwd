@@ -8,7 +8,7 @@ use core::{
 use std::{io::Error, net::UdpSocket, sync::Arc};
 
 use crate::{
-    shaper::TokenBucket,
+    shaper::Shaper,
     stat::{CommonStat, SocketStat, TxStat},
     Produce,
 };
@@ -32,7 +32,7 @@ pub struct UdpWorker<B, D> {
     /// Whether this worker is still active.
     is_running: Arc<AtomicBool>,
     /// The shaper.
-    bucket: Arc<TokenBucket>,
+    shaper: Shaper,
     /// Runtime statistics.
     stat: Arc<LocalStat>,
 }
@@ -43,9 +43,11 @@ impl<B, D> UdpWorker<B, D> {
         bind: B,
         data: D,
         is_running: Arc<AtomicBool>,
-        bucket: Arc<TokenBucket>,
+        limit: Arc<AtomicU64>,
         stat: Arc<LocalStat>,
     ) -> Self {
+        let shaper = Shaper::new(0, limit);
+
         Self {
             addr,
             bind,
@@ -54,7 +56,7 @@ impl<B, D> UdpWorker<B, D> {
             requests_per_sock: u64::MAX,
             requests_per_sock_done: 0,
             is_running,
-            bucket,
+            shaper,
             stat,
         }
     }
@@ -72,12 +74,14 @@ where
 {
     pub fn run(mut self) {
         while self.is_running.load(Ordering::Relaxed) {
-            match self.bucket.take(32) {
+            match self.shaper.tick() {
                 0 => Self::wait(),
                 n => {
                     for _ in 0..n {
                         self.execute();
                     }
+
+                    self.shaper.consume(n);
                 }
             }
         }

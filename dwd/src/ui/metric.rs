@@ -7,10 +7,10 @@ mod meter;
 mod throughput;
 
 /// Stateful metric that can display itself.
-pub trait Metric<S>
+pub trait Metric
 where
     Self: Display,
 {
-    /// Updates this metric using specified state.
-    fn update(&mut self, stat: &S);
+    /// Updates this metric.
+    fn update(&mut self);
 }

@@ -1,0 +1,41 @@
+[package]
+name = "dwd"
+version = "0.1.1"
+edition = "2021"
+publish = true
+description = "High performance traffic generator"
+license-file = "LICENSE"
+repository = "https://github.com/yanet-platform/dwd"
+
+[dependencies]
+log = "0.4"
+simple_logger = { version = "5", features = ["timestamps"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["rt", "net", "time", "macros", "sync"] }
+clap = { version = "4.5", features = ["derive"] }
+ratatui = "0.29.0"
+crossterm = "0.28.1"
+futures = "0.3.31"
+
+dpdk = { version = "0.1", path = "../dpdk", optional = true }
+thiserror = { version = "2", optional = true }
+pnet = { version = "0.35", optional = true }
+pcap-parser = { version = "0.16", optional = true }
+etherparse = { version = "0.16", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+netlink-packet-core = { version = "0.7" }
+netlink-packet-route = { version = "0.20" }
+netlink-packet-sock-diag = "0.4.2"
+netlink-proto = "0.11.3"
+netlink-sys = { version = "0.8" }
+
+[features]
+dpdk = [
+    "dep:dpdk",
+    "dep:thiserror",
+    "dep:pnet",
+    "dep:pcap-parser",
+    "dep:etherparse",
+]

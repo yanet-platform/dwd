@@ -12,11 +12,11 @@ pub struct Cmd {
     pub mode: ModeCmd,
     /// Path to the generator file.
     /// See /etc/dwd/generator.yaml for details.
-    #[clap(long, global = true, conflicts_with = "generator-stdin")]
+    #[clap(long, global = true)]
     pub generator: Option<PathBuf>,
     /// Be verbose in terms of logging.
     #[clap(short, action = ArgAction::Count, global = true)]
-    pub verbose: usize,
+    pub verbose: u8,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -25,6 +25,17 @@ pub enum ModeCmd {
     ///
     /// Response packets (if any) will be ignored.
     Udp(UdpCmd),
+    #[cfg(feature = "dpdk")]
+    /// DPDK mode.
+    ///
+    /// This mode is capable of generating very intensive workload by utilizing
+    /// the DPDK library.
+    /// The core idea is kernel bypass and working with NIC entirely in
+    /// userspace.
+    ///
+    /// Note, that this mode requires the application to be run with CAP_ADMIN
+    /// capabilities.
+    Dpdk(DpdkCmd),
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -48,4 +59,17 @@ pub struct NativeLoadCmd {
     /// If none given (the default) sockets renew is disabled.
     #[clap(long)]
     pub requests_per_socket: Option<u64>,
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct DpdkCmd {
+    /// Path to the DPDK configuration file in YAML format.
+    #[clap(long, required = true)]
+    pub dpdk_path: PathBuf,
+    /// Path to the PCAP file (not pcapng!).
+    ///
+    /// Packets containing in this file will be used as a workload, looping
+    /// infinitely until profile exhaustion.
+    #[clap(long, required = true)]
+    pub pcap_path: PathBuf,
 }

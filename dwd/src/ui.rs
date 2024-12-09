@@ -31,17 +31,13 @@ use crate::{
 mod metric;
 mod widget;
 
-pub fn run<S>(stat: Arc<S>, tx: Sender<GeneratorEvent>) -> Result<(), Box<dyn Error + Send + Sync>>
-where
-    S: CommonStat + TxStat + SocketStat + 'static,
-{
+pub fn run(mut app: Ui) -> Result<(), Box<dyn Error + Send + Sync>> {
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = Ui::new(stat, tx);
     let rc = app.run(&mut terminal, Duration::from_millis(25));
 
     crossterm::terminal::disable_raw_mode()?;
@@ -51,38 +47,45 @@ where
     rc
 }
 
-pub struct Ui<S> {
+pub struct Ui {
     tx: Sender<GeneratorEvent>,
-    stat: Arc<S>,
     head: StatusWidget,
-    tx_stat: TxStatWidget<S>,
-    sock: SockStatWidget<S>,
+    tx_stat: TxStatWidget,
+    sock: Option<SockStatWidget>,
     input: InputWidget,
     keymap: KeymapWidget,
 }
 
-impl<S> Ui<S>
-where
-    S: CommonStat + TxStat + SocketStat + 'static,
-{
-    pub fn new(stat: Arc<S>, tx: Sender<GeneratorEvent>) -> Self {
+impl Ui {
+    pub fn new<S>(stat: Arc<S>, tx: Sender<GeneratorEvent>) -> Self
+    where
+        S: CommonStat + TxStat + Send + Sync + 'static,
+    {
         let head = StatusWidget::new();
-        let tx_stat = TxStatWidget::new();
-        let sock = SockStatWidget::new();
+        let tx_stat = TxStatWidget::new(stat);
         let input = InputWidget::new();
         let keymap = KeymapWidget::new();
 
         Self {
             tx,
-            stat,
             head,
             keymap,
             tx_stat,
             input,
-            sock,
+            sock: None,
         }
     }
 
+    pub fn with_sock<S>(mut self, stat: Arc<S>) -> Self
+    where
+        S: SocketStat + Send + Sync + 'static,
+    {
+        self.sock = Some(SockStatWidget::new(stat));
+        self
+    }
+}
+
+impl Ui {
     pub fn run<B>(&mut self, terminal: &mut Terminal<B>, fps: Duration) -> Result<(), Box<dyn Error + Send + Sync>>
     where
         B: Backend,
@@ -151,7 +154,6 @@ where
             Constraint::Length(4),
             Constraint::Length(3),
             Constraint::Min(20),
-            
             Constraint::Length(2 + self.keymap.rows()),
         ])
         .areas(frame.area());
@@ -177,24 +179,28 @@ where
             .areas(area);
 
         self.tx_stat.draw(frame, tx_stat);
-        self.sock.draw(frame, sock);
+        if let Some(s) = &mut self.sock {
+            s.draw(frame, sock);
+        }
     }
 
     pub fn on_tick(&mut self) {
-        self.tx_stat.update(&self.stat);
-        self.sock.update(&self.stat);
+        self.tx_stat.update();
+        if let Some(s) = &mut self.sock {
+            s.update();
+        }
     }
 }
 
-struct MetricWidget<S> {
+struct MetricWidget {
     name: Cow<'static, str>,
-    metric: Box<dyn Metric<S>>,
+    metric: Box<dyn Metric + Send>,
     name_style: Style,
     metric_style: Style,
 }
 
-impl<S> MetricWidget<S> {
-    pub fn new<T>(name: T, metric: Box<dyn Metric<S>>) -> Self
+impl MetricWidget {
+    pub fn new<T>(name: T, metric: Box<dyn Metric + Send>) -> Self
     where
         T: Into<Cow<'static, str>>,
     {
@@ -215,8 +221,8 @@ impl<S> MetricWidget<S> {
         self
     }
 
-    pub fn update(&mut self, stat: &S) {
-        self.metric.update(stat);
+    pub fn update(&mut self) {
+        self.metric.update();
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
@@ -229,13 +235,13 @@ impl<S> MetricWidget<S> {
     }
 }
 
-struct MetricListWidget<S> {
+struct MetricListWidget {
     name: Cow<'static, str>,
-    widgets: Vec<MetricWidget<S>>,
+    widgets: Vec<MetricWidget>,
 }
 
-impl<S> MetricListWidget<S> {
-    pub fn new<T>(name: T, widgets: Vec<MetricWidget<S>>) -> Self
+impl MetricListWidget {
+    pub fn new<T>(name: T, widgets: Vec<MetricWidget>) -> Self
     where
         T: Into<Cow<'static, str>>,
     {
@@ -261,30 +267,36 @@ impl<S> MetricListWidget<S> {
         }
     }
 
-    pub fn update(&mut self, stat: &S) {
+    pub fn update(&mut self) {
         for widget in &mut self.widgets {
-            widget.update(stat);
+            widget.update();
         }
     }
 }
 
-struct TxStatWidget<S> {
-    widget: MetricListWidget<S>,
+struct TxStatWidget {
+    widget: MetricListWidget,
 }
 
-impl<S> TxStatWidget<S>
-where
-    S: CommonStat + TxStat + 'static,
-{
-    pub fn new() -> Self {
+impl TxStatWidget {
+    pub fn new<S>(stat: Arc<S>) -> Self
+    where
+        S: CommonStat + TxStat + Send + Sync + 'static,
+    {
         let widgets = vec![
-            MetricWidget::new("RPS expected ", Box::new(Gauge::new(|s: &S| s.generator()))),
+            MetricWidget::new("RPS expected ", Box::new(Gauge::new(|s| s.generator(), stat.clone()))),
             MetricWidget::new(
                 "RPS current  ",
-                Box::new(Meter::new(Box::new(|s: &S| s.num_requests()))),
+                Box::new(Meter::new(|s| s.num_requests(), stat.clone())),
             ),
-            MetricWidget::new("Requests sent", Box::new(Gauge::new(|s: &S| s.num_requests()))),
-            MetricWidget::new("Bitrate TX   ", Box::new(Throughput::new(|s: &S| s.bytes_tx()))),
+            MetricWidget::new(
+                "Requests sent",
+                Box::new(Gauge::new(|s| s.num_requests(), stat.clone())),
+            ),
+            MetricWidget::new(
+                "Bitrate TX   ",
+                Box::new(Throughput::new(|s| s.bytes_tx(), stat.clone())),
+            ),
         ];
 
         let widget = MetricListWidget::new("Requests", widgets);
@@ -296,24 +308,24 @@ where
         self.widget.draw(frame, area);
     }
 
-    pub fn update(&mut self, stat: &S) {
-        self.widget.update(stat);
+    pub fn update(&mut self) {
+        self.widget.update();
     }
 }
 
-struct SockStatWidget<S> {
-    widget: MetricListWidget<S>,
+struct SockStatWidget {
+    widget: MetricListWidget,
 }
 
-impl<S> SockStatWidget<S>
-where
-    S: SocketStat + 'static,
-{
-    pub fn new() -> Self {
+impl SockStatWidget {
+    pub fn new<S>(stat: Arc<S>) -> Self
+    where
+        S: SocketStat + Send + Sync + 'static,
+    {
         let widgets = vec![
-            MetricWidget::new("Created", Box::new(Gauge::new(|s: &S| s.num_sock_created()))),
-            MetricWidget::new("Rate   ", Box::new(Meter::new(Box::new(|s: &S| s.num_sock_created())))),
-            MetricWidget::new("Errors ", Box::new(Gauge::new(|s: &S| s.num_sock_errors())))
+            MetricWidget::new("Created", Box::new(Gauge::new(|s| s.num_sock_created(), stat.clone()))),
+            MetricWidget::new("Rate   ", Box::new(Meter::new(|s| s.num_sock_created(), stat.clone()))),
+            MetricWidget::new("Errors ", Box::new(Gauge::new(|s| s.num_sock_errors(), stat.clone())))
                 .with_metric_style(Style::default().fg(Color::Red)),
         ];
 
@@ -326,7 +338,7 @@ where
         self.widget.draw(frame, area);
     }
 
-    pub fn update(&mut self, stat: &S) {
-        self.widget.update(stat);
+    pub fn update(&mut self) {
+        self.widget.update();
     }
 }
