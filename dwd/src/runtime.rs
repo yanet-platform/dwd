@@ -67,44 +67,6 @@ impl Runtime {
         Self { cfg, is_running }
     }
 
-    // TODO: refactor
-    #[cfg(feature = "dpdk")]
-    async fn run_dpdk(self, cfg: DpdkConfig) -> Result<(), Box<dyn Error>> {
-        let cfg = cfg.into_inner();
-        let dpdk = DpdkWorkerGroup::new(cfg, self.is_running.clone())?;
-        let stat = Arc::new(DpdkStat::new(dpdk.stats()));
-        let limits = dpdk.pps_limits();
-
-        let thread: JoinHandle<()> = Builder::new().spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            runtime
-                .block_on(async move {
-                    let (tx, rx) = mpsc::channel(1);
-
-                    let ui = Ui::new(stat.clone(), tx);
-                    let ui = self.run_ui(ui)?;
-
-                    let (shaper,) = tokio::join!(self.run_generator(limits, stat, rx));
-                    shaper?;
-
-                    ui.join().expect("no self join").unwrap();
-
-                    Ok::<(), Box<dyn Error>>(())
-                })
-                .unwrap();
-
-            // Ok(())
-        })?;
-
-        dpdk.run()?;
-        thread.join().expect("no self join");
-
-        Ok(())
-    }
-
     pub async fn run(self) -> Result<(), Box<dyn Error>> {
         match self.cfg.mode.clone() {
             ModeConfig::Udp(cfg) => {
@@ -169,6 +131,44 @@ impl Runtime {
         for thread in threads {
             thread.join().expect("no self join");
         }
+
+        Ok(())
+    }
+
+    // TODO: refactor
+    #[cfg(feature = "dpdk")]
+    async fn run_dpdk(self, cfg: DpdkConfig) -> Result<(), Box<dyn Error>> {
+        let cfg = cfg.into_inner();
+        let dpdk = DpdkWorkerGroup::new(cfg, self.is_running.clone())?;
+        let stat = Arc::new(DpdkStat::new(dpdk.stats()));
+        let limits = dpdk.pps_limits();
+
+        let thread: JoinHandle<()> = Builder::new().spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime
+                .block_on(async move {
+                    let (tx, rx) = mpsc::channel(1);
+
+                    let ui = Ui::new(stat.clone(), tx);
+                    let ui = self.run_ui(ui)?;
+
+                    let (shaper,) = tokio::join!(self.run_generator(limits, stat, rx));
+                    shaper?;
+
+                    ui.join().expect("no self join").unwrap();
+
+                    Ok::<(), Box<dyn Error>>(())
+                })
+                .unwrap();
+
+            // Ok(())
+        })?;
+
+        dpdk.run()?;
+        thread.join().expect("no self join");
 
         Ok(())
     }
