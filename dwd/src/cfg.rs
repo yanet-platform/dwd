@@ -3,6 +3,7 @@ use core::{
     fmt::{self, Debug, Formatter},
     net::SocketAddr,
     num::NonZero,
+    time::Duration,
 };
 
 #[cfg(feature = "dpdk")]
@@ -33,12 +34,17 @@ impl TryFrom<Cmd> for Config {
     fn try_from(v: Cmd) -> Result<Self, Self::Error> {
         let mode = v.mode.try_into()?;
         let generator_fn = {
-            let generator = v.generator.clone();
+            let path = v.generator.clone();
 
             Box::new(move || -> Result<Box<dyn Generator>, Box<dyn Error>> {
-                match &generator {
+                match &path {
                     Some(path) => generator::load(path),
-                    None => Ok(Box::new(LineGenerator::infinite_max())),
+                    None => {
+                        const CENTURY: Duration = Duration::from_secs(86400 * 365 * 100);
+                        let generator = LineGenerator::new(1000, 1000, CENTURY);
+
+                        Ok(Box::new(generator))
+                    }
                 }
             })
         };

@@ -360,15 +360,11 @@ impl LineGenerator {
 
         Self { k, b, t0: Instant::now(), duration }
     }
-
-    pub fn infinite_max() -> Self {
-        Self::new(1000000000, 1000000000, Duration::from_secs(86400 * 365 * 100))
-    }
 }
 
 impl Generator for LineGenerator {
     fn activate(&mut self) {
-        self.t0 = Instant::now();
+        self.activate_at(Instant::now());
     }
 
     fn activate_at(&mut self, now: Instant) {
