@@ -1,4 +1,7 @@
+.venv
 .deploy
+dwd/etc/dwd/*.py
+dwd/etc/dwd/*.pcap
 /target
 /vendor
 Makefile
