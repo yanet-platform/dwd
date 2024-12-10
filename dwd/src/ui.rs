@@ -185,10 +185,10 @@ impl Ui {
 
         let mut areas = Vec::new();
         areas.push(Constraint::Length(6));
-        if let Some(s) = &self.sock {
+        if self.sock.is_some() {
             areas.push(Constraint::Length(5));
         }
-        if let Some(s) = &self.bursts_tx {
+        if self.bursts_tx.is_some() {
             areas.push(Constraint::Length(18));
         }
         areas.push(Constraint::Min(1));
@@ -197,16 +197,14 @@ impl Ui {
             .horizontal_margin(2)
             .vertical_margin(1)
             .split(area);
-        let mut area_idx = 0;
+        let mut areas = areas.iter();
 
-        self.tx_stat.draw(frame, areas[area_idx]);
-        area_idx += 1;
+        self.tx_stat.draw(frame, *areas.next().expect("we just filled areas"));
         if let Some(s) = &mut self.sock {
-            s.draw(frame, areas[area_idx]);
-            area_idx += 1;
+            s.draw(frame, *areas.next().expect("we just filled areas"));
         }
         if let Some(s) = &mut self.bursts_tx {
-            s.draw(frame, areas[area_idx]);
+            s.draw(frame, *areas.next().expect("we just filled areas"));
         }
     }
 
