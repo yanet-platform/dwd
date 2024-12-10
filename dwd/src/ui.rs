@@ -6,11 +6,11 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     prelude::{Backend, CrosstermBackend},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Block,
+    widgets::{Bar, BarChart, BarGroup, Block},
     Frame, Terminal,
 };
 use tokio::sync::mpsc::Sender;
@@ -24,7 +24,7 @@ use self::{
     widget::keymap::KeymapWidget,
 };
 use crate::{
-    stat::{CommonStat, SocketStat, TxStat},
+    stat::{BurstTxStat, CommonStat, SocketStat, TxStat},
     GeneratorEvent,
 };
 
@@ -52,6 +52,7 @@ pub struct Ui {
     head: StatusWidget,
     tx_stat: TxStatWidget,
     sock: Option<SockStatWidget>,
+    bursts_tx: Option<BurstTxStatWidget>,
     input: InputWidget,
     keymap: KeymapWidget,
 }
@@ -73,6 +74,7 @@ impl Ui {
             tx_stat,
             input,
             sock: None,
+            bursts_tx: None,
         }
     }
 
@@ -81,6 +83,14 @@ impl Ui {
         S: SocketStat + Send + Sync + 'static,
     {
         self.sock = Some(SockStatWidget::new(stat));
+        self
+    }
+
+    pub fn with_burst_tx<S>(mut self, stat: Arc<S>) -> Self
+    where
+        S: BurstTxStat + Send + Sync + 'static,
+    {
+        self.bursts_tx = Some(BurstTxStatWidget::new(stat));
         self
     }
 }
@@ -173,20 +183,39 @@ impl Ui {
             ));
         frame.render_widget(block, area);
 
-        let [tx_stat, sock, _] = Layout::vertical([Constraint::Length(6), Constraint::Length(5), Constraint::Min(1)])
+        let mut areas = Vec::new();
+        areas.push(Constraint::Length(6));
+        if let Some(s) = &self.sock {
+            areas.push(Constraint::Length(5));
+        }
+        if let Some(s) = &self.bursts_tx {
+            areas.push(Constraint::Length(18));
+        }
+        areas.push(Constraint::Min(1));
+
+        let areas = Layout::vertical(areas)
             .horizontal_margin(2)
             .vertical_margin(1)
-            .areas(area);
+            .split(area);
+        let mut area_idx = 0;
 
-        self.tx_stat.draw(frame, tx_stat);
+        self.tx_stat.draw(frame, areas[area_idx]);
+        area_idx += 1;
         if let Some(s) = &mut self.sock {
-            s.draw(frame, sock);
+            s.draw(frame, areas[area_idx]);
+            area_idx += 1;
+        }
+        if let Some(s) = &mut self.bursts_tx {
+            s.draw(frame, areas[area_idx]);
         }
     }
 
     pub fn on_tick(&mut self) {
         self.tx_stat.update();
         if let Some(s) = &mut self.sock {
+            s.update();
+        }
+        if let Some(s) = &mut self.bursts_tx {
             s.update();
         }
     }
@@ -340,5 +369,74 @@ impl SockStatWidget {
 
     pub fn update(&mut self) {
         self.widget.update();
+    }
+}
+
+struct BurstTxStatWidget {
+    bursts: Vec<Gauge>,
+    bars: Vec<Bar<'static>>,
+}
+
+impl BurstTxStatWidget {
+    pub fn new<S>(stat: Arc<S>) -> Self
+    where
+        S: BurstTxStat + Send + Sync + 'static,
+    {
+        let mut bursts = Vec::with_capacity(16);
+        for idx in 0..16 {
+            bursts.push(Gauge::new(
+                move |s| s.num_bursts_tx(2 * idx) + s.num_bursts_tx(2 * idx + 1),
+                stat.clone(),
+            ));
+        }
+
+        let bars: Vec<Bar> = bursts
+            .iter()
+            .enumerate()
+            .map(|(pps, value)| {
+                let color = match pps {
+                    0..4 => Color::Green,
+                    4..8 => Color::Yellow,
+                    _ => Color::Red,
+                };
+                Bar::default()
+                    .value(value.get())
+                    .label(Line::from(format!("[{:02}-{:02}]", 2 * pps + 1, 2 * pps + 2)))
+                    .style(Style::default().fg(color))
+            })
+            .collect();
+
+        Self { bursts, bars }
+    }
+
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        let block = Block::bordered()
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                "Bursts TX",
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ));
+        frame.render_widget(block, area);
+
+        let [area] = Layout::vertical([Constraint::Percentage(100)])
+            .horizontal_margin(2)
+            .vertical_margin(1)
+            .areas(area);
+
+        let widget = BarChart::default()
+            .data(BarGroup::default().bars(&self.bars))
+            .bar_width(1)
+            .bar_gap(0)
+            .direction(Direction::Horizontal);
+        // .bar_style();
+
+        frame.render_widget(widget, area);
+    }
+
+    pub fn update(&mut self) {
+        for (burst, bar) in &mut self.bursts.iter_mut().zip(self.bars.iter_mut()) {
+            burst.update();
+            *bar = bar.clone().value(burst.get());
+        }
     }
 }

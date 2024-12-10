@@ -1,6 +1,6 @@
 [package]
 name = "dwd"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 publish = true
 description = "High performance traffic generator"

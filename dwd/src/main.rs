@@ -14,7 +14,7 @@ pub fn main() {
     dwd::logging::init(cmd.verbose as usize).unwrap();
 
     if let Err(err) = run(cmd) {
-        eprintln!("ERROR: {err}");
+        log::error!("ERROR: {err}");
         std::process::exit(1);
     }
 }

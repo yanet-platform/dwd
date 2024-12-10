@@ -22,7 +22,7 @@ use thiserror::Error;
 
 use crate::{
     shaper::Shaper,
-    stat::{CommonStat, TxStat},
+    stat::{BurstTxStat, CommonStat, TxStat},
 };
 
 const MBUFS_COUNT: u32 = 256 * 1024;
@@ -530,7 +530,6 @@ impl Worker {
                     self.packets_count_tx += tx_size as usize;
                     self.stat.on_requests(tx_size as u64);
                     self.stat.on_send(size);
-                    // worker.stats.bursts_tx[txSize] += 1;
 
                     self.shaper.consume(tokens);
                 }
@@ -619,6 +618,7 @@ mod nl {
 pub struct LocalStat {
     num_requests: UnsafeCell<u64>,
     bytes_tx: UnsafeCell<u64>,
+    bursts_tx: [UnsafeCell<u64>; 32],
 }
 
 unsafe impl Sync for LocalStat {}
@@ -659,10 +659,18 @@ impl TxStat for Stat {
     }
 }
 
+impl BurstTxStat for Stat {
+    #[inline]
+    fn num_bursts_tx(&self, idx: usize) -> u64 {
+        self.stats.iter().map(|v| unsafe { *v.bursts_tx[idx].get() }).sum()
+    }
+}
+
 impl LocalStat {
     #[inline]
     pub fn on_requests(&self, n: u64) {
         unsafe { *self.num_requests.get() += n };
+        unsafe { *self.bursts_tx[n as usize - 1].get() += 1 };
     }
 
     #[inline]

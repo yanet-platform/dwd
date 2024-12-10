@@ -19,6 +19,11 @@ impl Gauge {
         let f = move || f(&stat);
         Self { f: Box::new(f), value: 0 }
     }
+
+    #[inline]
+    pub const fn get(&self) -> u64 {
+        self.value
+    }
 }
 
 impl Display for Gauge {

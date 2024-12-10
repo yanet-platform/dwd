@@ -152,7 +152,7 @@ impl Runtime {
                 .block_on(async move {
                     let (tx, rx) = mpsc::channel(1);
 
-                    let ui = Ui::new(stat.clone(), tx);
+                    let ui = Ui::new(stat.clone(), tx).with_burst_tx(stat.clone());
                     let ui = self.run_ui(ui)?;
 
                     let (shaper,) = tokio::join!(self.run_generator(limits, stat, rx));

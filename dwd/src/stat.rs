@@ -8,6 +8,10 @@ pub trait TxStat {
     fn bytes_tx(&self) -> u64;
 }
 
+pub trait BurstTxStat {
+    fn num_bursts_tx(&self, idx: usize) -> u64;
+}
+
 pub trait SocketStat {
     fn num_sock_created(&self) -> u64;
     fn num_sock_errors(&self) -> u64;
