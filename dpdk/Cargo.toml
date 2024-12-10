@@ -3,6 +3,9 @@ name = "dwd-dpdk"
 version = "0.1.0"
 edition = "2021"
 publish = true
+description = "DPDK for DWD"
+license-file = "../LICENSE"
+repository = "https://github.com/yanet-platform/dwd"
 
 [dependencies]
 log = "0.4"
