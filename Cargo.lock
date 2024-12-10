@@ -360,22 +360,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 
 [[package]]
-name = "dpdk"
-version = "0.1.0"
-dependencies = [
- "bindgen",
- "cc",
- "log",
- "serde",
-]
-
-[[package]]
 name = "dwd"
 version = "0.2.0"
 dependencies = [
  "clap",
  "crossterm",
- "dpdk",
+ "dwd-dpdk",
  "etherparse",
  "log",
  "netlink-packet-core",
@@ -391,6 +381,16 @@ dependencies = [
  "simple_logger",
  "thiserror 2.0.6",
  "tokio",
+]
+
+[[package]]
+name = "dwd-dpdk"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+ "log",
+ "serde",
 ]
 
 [[package]]

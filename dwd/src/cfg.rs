@@ -10,9 +10,8 @@ use core::{
 use {
     crate::{
         cmd::DpdkCmd,
-        worker::dpdk::{Config as DpdkWorkerConfig, PciDeviceName, PortConfig},
+        worker::dpdk::{CoreId, Config as DpdkWorkerConfig, PciDeviceName, PortConfig},
     },
-    dpdk::cpu::CoreId,
     serde::Deserialize,
     std::{collections::HashMap, fs},
 };

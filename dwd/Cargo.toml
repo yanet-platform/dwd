@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 publish = true
 description = "High performance traffic generator"
-license-file = "LICENSE"
+license-file = "../LICENSE"
 repository = "https://github.com/yanet-platform/dwd"
 
 [dependencies]
@@ -17,7 +17,7 @@ clap = { version = "4.5", features = ["derive"] }
 ratatui = "0.29.0"
 crossterm = "0.28.1"
 
-dpdk = { version = "0.1", path = "../dpdk", optional = true }
+dwd-dpdk = { version = "0.1", path = "../dpdk", optional = true }
 thiserror = { version = "2", optional = true }
 pnet = { version = "0.35", optional = true }
 pcap-parser = { version = "0.16", optional = true }
@@ -32,7 +32,7 @@ netlink-sys = { version = "0.8" }
 
 [features]
 dpdk = [
-    "dep:dpdk",
+    "dep:dwd-dpdk",
     "dep:thiserror",
     "dep:pnet",
     "dep:pcap-parser",

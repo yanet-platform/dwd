@@ -10,9 +10,11 @@ use std::{
     sync::Arc,
 };
 
-use dpdk::{
+pub use dwd_dpdk::cpu::CoreId;
+use dwd_dpdk::{
+    self as dpdk,
     boxed::RteBox,
-    cpu::{CoreId, CoreMask},
+    cpu::CoreMask,
     eal::{Eal, EalBuilder},
 };
 use pcap_parser::parse_pcap;
