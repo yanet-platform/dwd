@@ -377,7 +377,6 @@ dependencies = [
  "crossterm",
  "dpdk",
  "etherparse",
- "futures",
  "log",
  "netlink-packet-core",
  "netlink-packet-route",
