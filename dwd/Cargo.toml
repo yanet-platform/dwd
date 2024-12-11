@@ -17,7 +17,7 @@ clap = { version = "4.5", features = ["derive"] }
 ratatui = "0.29.0"
 crossterm = "0.28.1"
 
-dwd-dpdk = { version = "0.1", path = "../dpdk", optional = true }
+dpdk = { version = "0.1", path = "../dpdk", package = "dwd-dpdk", optional = true }
 thiserror = { version = "2", optional = true }
 pnet = { version = "0.35", optional = true }
 pcap-parser = { version = "0.16", optional = true }
@@ -32,7 +32,7 @@ netlink-sys = { version = "0.8" }
 
 [features]
 dpdk = [
-    "dep:dwd-dpdk",
+    "dep:dpdk",
     "dep:thiserror",
     "dep:pnet",
     "dep:pcap-parser",

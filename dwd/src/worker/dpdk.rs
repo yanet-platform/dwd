@@ -10,8 +10,8 @@ use std::{
     sync::Arc,
 };
 
-pub use dwd_dpdk::cpu::CoreId;
-use dwd_dpdk::{
+pub use dpdk::cpu::CoreId;
+use dpdk::{
     self as dpdk,
     boxed::RteBox,
     cpu::CoreMask,
