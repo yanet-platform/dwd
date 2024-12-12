@@ -24,7 +24,7 @@ pub mod ffi {
 #[link(name = "stub")]
 extern "C" {
     fn _rte_errno() -> core::ffi::c_int;
-    
+
     fn _rte_pktmbuf_alloc(mp: *mut ffi::rte_mempool) -> *mut ffi::rte_mbuf;
     fn _rte_pktmbuf_append(mbuf: *mut ffi::rte_mbuf, len: core::ffi::c_ushort) -> *mut core::ffi::c_char;
     // fn rte_pktmbuf_free_(packet: *mut rte_mbuf);
@@ -42,12 +42,13 @@ pub fn rte_lcore_to_socket_id(id: CoreId) -> SocketId {
 }
 
 /// Returns the error number value, stored per-thread, which can be queried
-/// after calls to certain functions to determine why those functions failed.
+/// after calls to certain functions to determine why those functions
+/// failed.
 ///
 /// Uses standard values from errno.h wherever possible, with a small number
 /// of additional possible values for RTE-specific conditions.
 #[inline]
-pub unsafe fn rte_errno() -> core::ffi::c_int {
+unsafe fn rte_errno() -> core::ffi::c_int {
     _rte_errno()
 }
 

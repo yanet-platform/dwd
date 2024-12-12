@@ -1,6 +1,5 @@
 use core::fmt::{self, Display, Formatter};
-
-use std::{error, ffi::CStr};
+use std::ffi::CStr;
 
 use crate::{ffi, rte_errno};
 
@@ -38,4 +37,4 @@ impl Display for Error {
     }
 }
 
-impl error::Error for Error {}
+impl core::error::Error for Error {}
