@@ -70,17 +70,29 @@ packets = (
 write_pcap("example-udp.pcap", packets)
 ```
 
-4. Type the following command:
+4. Prepare `dpdk.yaml`
+
+```yaml
+master_lcore: 0
+ports:
+  # PCI id of your device.
+  0000:5e:00.1:
+    # How many CPU cores we utilize.
+    cores: [10]
+
+```
+
+5. Type the following command:
 
 ```bash
 dwd dpdk --dpdk-path ./dpdk.yaml --pcap-path ./example-udp.pcap
 ```
 
-5. Write the desired load in the UI:
+6. Write the desired load in the UI:
 
 ![](./docs/ui.png)
 
-6. You're awesome!
+7. You're awesome!
 
 ## Native network stack mode
 Native mode utilizes the existing kernel network stack for packet generation/processing. That is, all TCP and UDP sockets are native, performance is increased due to carefully organized code, coroutines and multithreading.
