@@ -7,6 +7,7 @@ pub mod cpu;
 pub mod eal;
 pub mod error;
 pub mod ethdev;
+pub mod lcore;
 
 pub const RTE_CACHE_LINE_SIZE: u32 = ffi::RTE_CACHE_LINE_SIZE;
 

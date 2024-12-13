@@ -194,10 +194,10 @@ impl DpdkWorkerGroup {
         m.load_pcap()?;
 
         // 3. Validate.
-        if unsafe { dpdk::ffi::rte_eth_dev_count_avail() as usize } != m.cfg.ports.len() {
+        if dpdk::ethdev::eth_dev_count() as usize != m.cfg.ports.len() {
             return Err(Error::InvalidPortsCount);
         }
-        if unsafe { dpdk::ffi::rte_lcore_count() as usize } != m.cfg.cores_count() + 1 {
+        if dpdk::lcore::lcore_count() as usize != m.cfg.cores_count() + 1 {
             return Err(Error::InvalidCoresCount);
         }
 
@@ -214,9 +214,7 @@ impl DpdkWorkerGroup {
     }
 
     pub fn run(mut self) -> Result<(), Error> {
-        // 5. Start devices.
-        let dev_count = unsafe { dpdk::ffi::rte_eth_dev_count_avail() };
-        for port_id in 0..dev_count {
+        for port_id in dpdk::ethdev::eth_dev_iter() {
             unsafe {
                 dpdk::ffi::rte_eth_stats_reset(port_id);
                 dpdk::ffi::rte_eth_dev_start(port_id);
