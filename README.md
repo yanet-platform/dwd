@@ -17,7 +17,7 @@ Type the following command:
 dwd udp <IP:PORT>
 ```
 
-The DWD control UI opens, where you can type the desired RPS.
+The DWD control UI will be opened, where you can type the desired RPS.
 
 #### Load 30'000'000 UDP packets per second on a single CPU core using DPDK mode
 
@@ -138,7 +138,7 @@ Packets from a given file are distributed evenly among workers before shooting (
 ## Load profiles
 A load profile is a declarative description of how the load should be generated and for how long.
 
-Usually we want the load created on the target system to obey some laws. For example, to be increased linearly over some time from zero to the expected value, and then remain at the achieved value for some time.
+Usually we want the load created on the target system to obey some rules. For example, to be increased linearly over some time from zero to the expected value, and then remain at the achieved value for some time.
 In other words, we want control.
 
 Load profiles solve this problem by describing **generators**, each of which is a pre-prepared module that can say how many number of requests per second the system should generate at a certain point in time.
