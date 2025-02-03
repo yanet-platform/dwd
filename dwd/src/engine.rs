@@ -1,11 +1,11 @@
 use core::{
-    error::Error,
-    net::{IpAddr, Ipv6Addr, SocketAddr},
     ops::Deref,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 use std::{
+    error::Error,
+    future,
     sync::{atomic::AtomicU64, Arc},
     thread::{self, Builder, JoinHandle},
 };
@@ -19,27 +19,16 @@ use crate::{
 };
 use crate::{
     cfg::{Config, ModeConfig, UdpConfig},
+    engine::http::Engine as HttpEngine,
     generator::{Generator, SuspendableGenerator},
+    sockbind::SocketAddrGen,
     stat::CommonStat,
     ui::{self, Ui},
-    worker::udp::{LocalStat, Stat as UdpStat, UdpWorker},
+    worker::udp::{Stat as UdpStat, UdpWorker},
     GeneratorEvent, Produce,
 };
 
-struct LocalAddrIter {
-    addrs: Vec<SocketAddr>,
-    idx: AtomicUsize,
-}
-
-impl Produce for Arc<LocalAddrIter> {
-    type Item = SocketAddr;
-
-    #[inline]
-    fn next(&self) -> &Self::Item {
-        let idx = self.idx.fetch_add(1, Ordering::Relaxed);
-        &self.addrs[idx % self.addrs.len()]
-    }
-}
+pub mod http;
 
 struct Buffer(Vec<u8>);
 
@@ -69,6 +58,9 @@ impl Runtime {
 
     pub async fn run(self) -> Result<(), Box<dyn Error>> {
         match self.cfg.mode.clone() {
+            ModeConfig::Http(cfg) => {
+                self.run_http(cfg).await?;
+            }
             ModeConfig::Udp(cfg) => {
                 self.run_udp(cfg).await?;
             }
@@ -81,20 +73,40 @@ impl Runtime {
         Ok(())
     }
 
+    pub async fn run_http(self, cfg: http::Config) -> Result<(), Box<dyn Error>> {
+        let engine = HttpEngine::new(cfg);
+        let stat = engine.stat();
+        let limits = engine.limits().into_iter().flatten().collect();
+
+        let engine = {
+            let is_running = self.is_running.clone();
+            Builder::new().spawn(move || engine.run(future::pending(), is_running))?
+        };
+
+        let (tx, rx) = mpsc::channel(1);
+
+        let ui = Ui::new(stat.clone(), tx).with_sock(stat.clone());
+        let ui = self.run_ui(ui)?;
+
+        let (shaper,) = tokio::join!(self.run_generator(limits, stat.clone(), rx));
+        shaper?;
+
+        ui.join().expect("no self join").unwrap();
+        engine.join().expect("no self join")?;
+
+        Ok(())
+    }
+
     pub async fn run_udp(self, cfg: UdpConfig) -> Result<(), Box<dyn Error>> {
         let num_threads = cfg.native.threads.into();
         let mut threads = Vec::with_capacity(num_threads);
 
-        let bind = Arc::new(LocalAddrIter {
-            addrs: vec![SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)],
-            idx: AtomicUsize::new(0),
-        });
+        let bind = Arc::new(SocketAddrGen::unspecified6());
         let data = Arc::new(Buffer(b"GET / HTTP/1.1\r\n\r\n".to_vec()));
         let mut stats = Vec::new();
         let mut limits = Vec::new();
 
         for idx in 0..num_threads {
-            let stat = Arc::new(LocalStat::default());
             let limit = Arc::new(AtomicU64::new(0));
 
             let thread = {
@@ -104,15 +116,16 @@ impl Runtime {
                     data.clone(),
                     self.is_running.clone(),
                     limit.clone(),
-                    stat.clone(),
                 )
                 .with_requests_per_sock(cfg.native.requests_per_socket());
+
+                stats.push(worker.stat());
+
                 Builder::new()
                     .name(format!("dwd:{idx:02}"))
                     .spawn(move || worker.run())?
             };
 
-            stats.push(stat);
             limits.push(limit);
             threads.push(thread);
         }

@@ -5,12 +5,16 @@ use core::{
     num::NonZero,
     time::Duration,
 };
+use std::{
+    net::{IpAddr, Ipv6Addr},
+    sync::Arc,
+};
 
 #[cfg(feature = "dpdk")]
 use {
     crate::{
         cmd::DpdkCmd,
-        worker::dpdk::{CoreId, Config as DpdkWorkerConfig, PciDeviceName, PortConfig},
+        worker::dpdk::{Config as DpdkWorkerConfig, CoreId, PciDeviceName, PortConfig},
     },
     serde::Deserialize,
     std::{collections::HashMap, fs},
@@ -18,7 +22,9 @@ use {
 
 use crate::{
     cmd::{Cmd, ModeCmd, NativeLoadCmd, UdpCmd},
+    engine::http::Config as HttpConfig,
     generator::{self, Generator, LineGenerator},
+    VecProduce,
 };
 
 #[derive(Debug)]
@@ -59,6 +65,7 @@ impl TryFrom<Cmd> for Config {
 
 #[derive(Debug, Clone)]
 pub enum ModeConfig {
+    Http(HttpConfig),
     Udp(UdpConfig),
     #[cfg(feature = "dpdk")]
     Dpdk(DpdkConfig),
@@ -69,6 +76,7 @@ impl TryFrom<ModeCmd> for ModeConfig {
 
     fn try_from(v: ModeCmd) -> Result<Self, Self::Error> {
         let m = match v {
+            ModeCmd::Http(v) => Self::Http(v.try_into()?),
             ModeCmd::Udp(v) => Self::Udp(v.try_into()?),
             #[cfg(feature = "dpdk")]
             ModeCmd::Dpdk(v) => Self::Dpdk(v.try_into()?),
@@ -106,6 +114,8 @@ pub struct NativeLoadConfig {
     /// Maximum number of requests executed per socket before reconnection.
     /// If none given (default) sockets renew is disabled.
     requests_per_socket: Option<u64>,
+    /// Socket addresses to bind on.
+    pub bind_endpoints: Arc<VecProduce<SocketAddr>>,
 }
 
 impl NativeLoadConfig {
@@ -121,9 +131,41 @@ impl TryFrom<NativeLoadCmd> for NativeLoadConfig {
     type Error = Box<dyn Error>;
 
     fn try_from(cmd: NativeLoadCmd) -> Result<Self, Self::Error> {
-        let NativeLoadCmd { threads, requests_per_socket } = cmd;
+        let NativeLoadCmd {
+            threads,
+            requests_per_socket,
+            bind_network,
+        } = cmd;
 
-        let m = Self { threads, requests_per_socket };
+        let mut bind_endpoints = Vec::new();
+        match bind_network {
+            Some(net) => {
+                for link in pnet::datalink::interfaces() {
+                    if !link.is_up() || link.is_loopback() || link.ips.is_empty() {
+                        continue;
+                    }
+
+                    bind_endpoints.extend(
+                        link.ips
+                            .into_iter()
+                            .filter(|v| net.contains(v.ip()))
+                            .map(|v| SocketAddr::new(v.ip(), 0)),
+                    );
+                }
+            }
+            None => {
+                bind_endpoints.push(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0));
+            }
+        }
+
+        log::debug!("bind endpoints: {:?}", bind_endpoints);
+        let bind_endpoints = Arc::new(VecProduce::new(bind_endpoints));
+
+        let m = Self {
+            threads,
+            requests_per_socket,
+            bind_endpoints,
+        };
 
         Ok(m)
     }
