@@ -85,7 +85,7 @@ impl Runtime {
 
         let (tx, rx) = mpsc::channel(1);
 
-        let ui = Ui::new(stat.clone(), tx).with_sock(stat.clone());
+        let ui = Ui::new(stat.clone(), tx).with_rx(stat.clone()).with_sock(stat.clone());
         let ui = self.run_ui(ui)?;
 
         let (shaper,) = tokio::join!(self.run_generator(limits, stat.clone(), rx));

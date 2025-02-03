@@ -24,7 +24,7 @@ use self::{
     widget::keymap::KeymapWidget,
 };
 use crate::{
-    stat::{BurstTxStat, CommonStat, SocketStat, TxStat},
+    stat::{BurstTxStat, CommonStat, RxStat, SocketStat, TxStat},
     GeneratorEvent,
 };
 
@@ -51,6 +51,7 @@ pub struct Ui {
     tx: Sender<GeneratorEvent>,
     head: StatusWidget,
     tx_stat: TxStatWidget,
+    rx_stat: Option<RxStatWidget>,
     sock: Option<SockStatWidget>,
     bursts_tx: Option<BurstTxStatWidget>,
     input: InputWidget,
@@ -72,10 +73,19 @@ impl Ui {
             head,
             keymap,
             tx_stat,
+            rx_stat: None,
             input,
             sock: None,
             bursts_tx: None,
         }
+    }
+
+    pub fn with_rx<S>(mut self, stat: Arc<S>) -> Self
+    where
+        S: RxStat + Send + Sync + 'static,
+    {
+        self.rx_stat = Some(RxStatWidget::new(stat));
+        self
     }
 
     pub fn with_sock<S>(mut self, stat: Arc<S>) -> Self
@@ -185,6 +195,9 @@ impl Ui {
 
         let mut areas = Vec::new();
         areas.push(Constraint::Length(6));
+        if self.rx_stat.is_some() {
+            areas.push(Constraint::Length(5));
+        }
         if self.sock.is_some() {
             areas.push(Constraint::Length(5));
         }
@@ -200,6 +213,9 @@ impl Ui {
         let mut areas = areas.iter();
 
         self.tx_stat.draw(frame, *areas.next().expect("we just filled areas"));
+        if let Some(s) = &mut self.rx_stat {
+            s.draw(frame, *areas.next().expect("we just filled areas"));
+        }
         if let Some(s) = &mut self.sock {
             s.draw(frame, *areas.next().expect("we just filled areas"));
         }
@@ -210,6 +226,9 @@ impl Ui {
 
     pub fn on_tick(&mut self) {
         self.tx_stat.update();
+        if let Some(s) = &mut self.rx_stat {
+            s.update();
+        }
         if let Some(s) = &mut self.sock {
             s.update();
         }
@@ -327,6 +346,45 @@ impl TxStatWidget {
         ];
 
         let widget = MetricListWidget::new("Requests", widgets);
+
+        Self { widget }
+    }
+
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.widget.draw(frame, area);
+    }
+
+    pub fn update(&mut self) {
+        self.widget.update();
+    }
+}
+
+struct RxStatWidget {
+    widget: MetricListWidget,
+}
+
+impl RxStatWidget {
+    pub fn new<S>(stat: Arc<S>) -> Self
+    where
+        S: RxStat + Send + Sync + 'static,
+    {
+        let widgets = vec![
+            MetricWidget::new(
+                "Responses    ",
+                Box::new(Gauge::new(|s| s.num_responses(), stat.clone())),
+            ),
+            MetricWidget::new(
+                "Timeouts     ",
+                Box::new(Gauge::new(|s| s.num_timeouts(), stat.clone())),
+            )
+            .with_metric_style(Style::default().fg(Color::Yellow)),
+            MetricWidget::new(
+                "Bitrate RX   ",
+                Box::new(Throughput::new(|s| s.bytes_rx(), stat.clone())),
+            ),
+        ];
+
+        let widget = MetricListWidget::new("Responses", widgets);
 
         Self { widget }
     }

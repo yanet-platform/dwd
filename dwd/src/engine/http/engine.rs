@@ -9,7 +9,7 @@ use std::{sync::Arc, thread, time::Instant};
 use anyhow::Error;
 use bytes::Bytes;
 use http::Request;
-use http_body_util::Empty;
+use http_body_util::{BodyExt, Empty};
 use hyper::client::conn::http1::{self, SendRequest};
 use tokio::{net::TcpSocket, runtime::Builder};
 
@@ -305,12 +305,18 @@ where
     #[inline]
     async fn perform_request(&mut self, stream: &mut SendRequest<Empty<Bytes>>) -> Result<u16, Error> {
         let req = self.data.next();
-        let resp = stream.send_request(req.clone()).await?;
+        let mut resp = stream.send_request(req.clone()).await?;
         self.stat.on_requests(1);
         // self.stat.on_send(self.request.len() as u64);
         // self.stat.on_recv(self.buf.len() as u64);
 
         let code = resp.status().as_u16();
+        while let Some(next) = resp.frame().await {
+            let frame = next?;
+            if let Some(chunk) = frame.data_ref() {
+                self.stat.on_recv(chunk.len() as u64);
+            }
+        }
 
         Ok(code)
     }

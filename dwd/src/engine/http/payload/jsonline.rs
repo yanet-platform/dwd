@@ -32,11 +32,13 @@ pub struct JsonLinePayload {
 }
 
 impl JsonLinePayload {
-    // TODO: docs.
+    /// Loads HTTP requests in JSON ammo format from specified path.
     pub fn from_fs<P>(path: P) -> Result<Vec<Request<Empty<Bytes>>>, Box<dyn Error>>
     where
         P: AsRef<Path>,
     {
+        log::debug!("loading HTTP requests from '{}' ...", path.as_ref().display());
+
         let rd = File::open(path)?;
         let rd = BufReader::new(rd);
 

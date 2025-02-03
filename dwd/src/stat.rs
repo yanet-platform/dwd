@@ -26,3 +26,10 @@ pub trait SocketStat {
     fn num_sock_created(&self) -> u64;
     fn num_sock_errors(&self) -> u64;
 }
+
+pub trait HttpStat {
+    fn num_2xx(&self) -> u64;
+    fn num_3xx(&self) -> u64;
+    fn num_4xx(&self) -> u64;
+    fn num_5xx(&self) -> u64;
+}

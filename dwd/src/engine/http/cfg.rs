@@ -6,6 +6,7 @@ use http_body_util::Empty;
 
 use crate::cfg::NativeLoadConfig;
 
+/// HTTP engine config.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Target endpoint.

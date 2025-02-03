@@ -6,15 +6,17 @@ use std::time::Instant;
 
 use crate::{
     histogram::LogHistogram,
-    stat::{CommonStat, RxStat, SocketStat, TxStat},
+    stat::{CommonStat, HttpStat, RxStat, SocketStat, TxStat},
 };
 
 #[derive(Debug, Default)]
 pub struct Stat {
     generator: AtomicU64,
+    /// Number of requests made.
     num_requests: AtomicU64,
+    /// Number of responses received.
     num_responses: AtomicU64,
-    /// The number of sockets created and initialized.
+    /// Number of sockets created and initialized.
     ///
     /// By initialization we mean, for example, socket creation, binding,
     /// successful connection establishing for TCP and other syscalls made
@@ -25,13 +27,21 @@ pub struct Stat {
     /// This can be either initialization errors like resource exhaustion, or
     /// communication errors.
     num_sock_errors: AtomicU64,
+    /// Number of timeouts occurred.
     num_timeouts: AtomicU64,
+    /// Number of 2xx responses received.
     num_2xx: AtomicU64,
+    /// Number of 3xx responses received.
     num_3xx: AtomicU64,
+    /// Number of 4xx responses received.
     num_4xx: AtomicU64,
+    /// Number of 5xx responses received.
     num_5xx: AtomicU64,
+    /// Number of bytes transmitted.
     bytes_tx: AtomicU64,
+    /// Number of bytes received.
     bytes_rx: AtomicU64,
+    /// Response times histogram.
     hist: LogHistogram,
 }
 
@@ -148,27 +158,27 @@ impl SocketStat for Stat {
     }
 }
 
-// impl HttpStat for Stat {
-//     #[inline]
-//     fn num_2xx(&self) -> u64 {
-//         self.num_2xx.load(Ordering::Relaxed)
-//     }
+impl HttpStat for Stat {
+    #[inline]
+    fn num_2xx(&self) -> u64 {
+        self.num_2xx.load(Ordering::Relaxed)
+    }
 
-//     #[inline]
-//     fn num_3xx(&self) -> u64 {
-//         self.num_3xx.load(Ordering::Relaxed)
-//     }
+    #[inline]
+    fn num_3xx(&self) -> u64 {
+        self.num_3xx.load(Ordering::Relaxed)
+    }
 
-//     #[inline]
-//     fn num_4xx(&self) -> u64 {
-//         self.num_4xx.load(Ordering::Relaxed)
-//     }
+    #[inline]
+    fn num_4xx(&self) -> u64 {
+        self.num_4xx.load(Ordering::Relaxed)
+    }
 
-//     #[inline]
-//     fn num_5xx(&self) -> u64 {
-//         self.num_5xx.load(Ordering::Relaxed)
-//     }
-// }
+    #[inline]
+    fn num_5xx(&self) -> u64 {
+        self.num_5xx.load(Ordering::Relaxed)
+    }
+}
 
 impl CommonStat for Stat {
     #[inline]
