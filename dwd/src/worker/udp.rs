@@ -44,7 +44,6 @@ impl<B, D> UdpWorker<B, D> {
         data: D,
         is_running: Arc<AtomicBool>,
         limit: Arc<AtomicU64>,
-        stat: Arc<LocalStat>,
     ) -> Self {
         let shaper = Shaper::new(0, limit);
 
@@ -57,14 +56,18 @@ impl<B, D> UdpWorker<B, D> {
             requests_per_sock_done: 0,
             is_running,
             shaper,
-            stat,
+            stat: Arc::new(LocalStat::default()),
         }
+    }
+
+    pub fn stat(&self) -> Arc<LocalStat> {
+        self.stat.clone()
     }
 
     pub fn with_requests_per_sock(mut self, requests_per_sock: u64) -> Self {
         self.requests_per_sock = requests_per_sock;
         self
-    }
+    }    
 }
 
 impl<B, D> UdpWorker<B, D>

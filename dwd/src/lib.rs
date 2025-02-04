@@ -1,12 +1,17 @@
+use core::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 pub mod cfg;
 pub mod cmd;
+pub mod engine;
 mod generator;
-pub mod runtime;
+mod histogram;
+pub mod logging;
 mod shaper;
+mod sockbind;
 mod stat;
 mod ui;
 mod worker;
-pub mod logging;
 
 /// Thread-safe producing iterators.
 ///
@@ -18,8 +23,36 @@ trait Produce {
     /// The type of the elements being produced.
     type Item: ?Sized;
 
-    /// Advances the producer and returns the next value.
+    /// Advances this producer and returns the next value.
     fn next(&self) -> &Self::Item;
+}
+
+/// Thread-safe infinite cycle producing iterator over the given vector.
+#[derive(Debug)]
+pub struct VecProduce<T> {
+    vec: Vec<T>,
+    idx: AtomicUsize,
+}
+
+impl<T> VecProduce<T> {
+    /// Constructs a new [`VecProduce`] from the given vector.
+    #[inline]
+    pub const fn new(vec: Vec<T>) -> Self {
+        Self { vec, idx: AtomicUsize::new(0) }
+    }
+}
+
+impl<T> Produce for Arc<VecProduce<T>> {
+    type Item = T;
+
+    #[inline]
+    fn next(&self) -> &Self::Item {
+        // Increment the current value, returning the previous one.
+        let idx = self.idx.fetch_add(1, Ordering::Relaxed);
+        let idx = idx % self.vec.len();
+
+        &self.vec[idx]
+    }
 }
 
 pub enum GeneratorEvent {

@@ -1,5 +1,6 @@
 .venv
 .deploy
+.vscode
 dwd/etc/dwd/*.py
 dwd/etc/dwd/*.pcap
 /target

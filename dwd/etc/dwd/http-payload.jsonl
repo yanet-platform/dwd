@@ -1,0 +1,2 @@
+{"uri": "/", "method": "GET", "host": "example.com", "headers": {"user-agent": "dwd"}}
+{"uri": "/api/v0/ping", "method": "GET", "host": "example.com", "headers": {"user-agent": "dwd"}}

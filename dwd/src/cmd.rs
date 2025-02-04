@@ -1,7 +1,10 @@
-use core::{net::SocketAddr, num::NonZero};
+use core::{error::Error, net::SocketAddr, num::NonZero};
 use std::path::PathBuf;
 
 use clap::{ArgAction, Parser};
+use pnet::ipnetwork::IpNetwork;
+
+use crate::engine::http::{payload::jsonline::JsonLinePayload, Config as HttpConfig};
 
 /// The traffic generator we deserve.
 #[derive(Debug, Clone, Parser)]
@@ -21,6 +24,8 @@ pub struct Cmd {
 
 #[derive(Debug, Clone, Parser)]
 pub enum ModeCmd {
+    /// HTTP mode.
+    Http(HttpCmd),
     /// UDP mode.
     ///
     /// Response packets (if any) will be ignored.
@@ -36,6 +41,66 @@ pub enum ModeCmd {
     /// Note, that this mode requires the application to be run with CAP_ADMIN
     /// capabilities.
     Dpdk(DpdkCmd),
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct HttpCmd {
+    /// Target endpoint.
+    #[clap(required = true)]
+    pub addr: SocketAddr,
+    /// Native workload settings.
+    #[clap(flatten)]
+    pub native: NativeLoadCmd,
+    /// Number of parallel jobs.
+    ///
+    /// This also limits the maximum concurrent requests in flight. To achieve
+    /// better runtime characteristics this value should be the multiple of
+    /// the number of threads.    
+    #[clap(short, long, default_value_t = std::thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN))]
+    pub concurrency: NonZero<usize>,
+    /// Path to the JSON payload file.        
+    #[clap(long, value_name = "PATH", required = true)]
+    pub payload_json: Option<PathBuf>,
+    /// Set linger TCP option with specified value.
+    #[clap(long)]
+    pub tcp_linger: Option<u64>,
+    /// Enable SOCK_NODELAY socket option.
+    #[clap(long)]
+    pub tcp_no_delay: bool,
+}
+
+impl TryFrom<HttpCmd> for HttpConfig {
+    type Error = Box<dyn Error>;
+
+    fn try_from(cmd: HttpCmd) -> Result<Self, Self::Error> {
+        let HttpCmd {
+            addr,
+            native,
+            concurrency,
+            payload_json,
+            tcp_linger,
+            tcp_no_delay,
+        } = cmd;
+
+        let requests = {
+            if let Some(path) = payload_json {
+                JsonLinePayload::from_fs(path)?
+            } else {
+                todo!();
+            }
+        };
+
+        let m = Self {
+            addr,
+            native: native.try_into()?,
+            concurrency,
+            tcp_linger,
+            tcp_no_delay,
+            requests,
+        };
+
+        Ok(m)
+    }
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -59,6 +124,14 @@ pub struct NativeLoadCmd {
     /// If none given (the default) sockets renew is disabled.
     #[clap(long)]
     pub requests_per_socket: Option<u64>,
+    /// IP prefix used to collect this machine's global unicast IP addresses and
+    /// use them as bind addresses.
+    /// For example, specifying "2a02:6b8:0:320:1111:1111:1111::/112" will scan
+    /// all interfaces, collect all global unicast IP addresses and filter
+    /// them by the given prefix. This option conflicts with the "bind-ips"
+    /// argument.
+    #[clap(long)]
+    pub bind_network: Option<IpNetwork>,
 }
 
 #[derive(Debug, Clone, Parser)]
