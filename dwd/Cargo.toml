@@ -30,6 +30,7 @@ pin-project-lite = "0.2"
 http-body-util = "0.1"
 anyhow = "1"
 pnet = "0.35"
+libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-packet-core = { version = "0.7" }
