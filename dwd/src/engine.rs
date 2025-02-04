@@ -85,7 +85,12 @@ impl Runtime {
 
         let (tx, rx) = mpsc::channel(1);
 
-        let ui = Ui::new(stat.clone(), tx).with_rx(stat.clone()).with_sock(stat.clone());
+        let ui = Ui::new(tx)
+            .with_tx(stat.clone())
+            .with_rx(stat.clone())
+            .with_http(stat.clone())
+            .with_sock(stat.clone())
+            .with_rx_timings(stat.clone());
         let ui = self.run_ui(ui)?;
 
         let (shaper,) = tokio::join!(self.run_generator(limits, stat.clone(), rx));
@@ -133,7 +138,7 @@ impl Runtime {
         let stat = Arc::new(UdpStat::new(stats));
         let (tx, rx) = mpsc::channel(1);
 
-        let ui = Ui::new(stat.clone(), tx).with_sock(stat.clone());
+        let ui = Ui::new(tx).with_tx(stat.clone()).with_sock(stat.clone());
         let ui = self.run_ui(ui)?;
 
         let (shaper,) = tokio::join!(self.run_generator(limits, stat.clone(), rx));
@@ -165,7 +170,7 @@ impl Runtime {
                 .block_on(async move {
                     let (tx, rx) = mpsc::channel(1);
 
-                    let ui = Ui::new(stat.clone(), tx).with_burst_tx(stat.clone());
+                    let ui = Ui::new(tx).with_tx(stat.clone()).with_burst_tx(stat.clone());
                     let ui = self.run_ui(ui)?;
 
                     let (shaper,) = tokio::join!(self.run_generator(limits, stat, rx));
