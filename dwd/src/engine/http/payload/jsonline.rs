@@ -110,10 +110,12 @@ impl TryFrom<JsonLineRecord> for Request<Empty<Bytes>> {
     }
 }
 
-impl From<JsonLineRecord> for Bytes {
+impl TryFrom<JsonLineRecord> for Bytes {
+    type Error = Box<dyn Error>;
+
     #[inline]
-    fn from(v: JsonLineRecord) -> Self {
-        v.to_bytes()
+    fn try_from(v: JsonLineRecord) -> Result<Self, Self::Error> {
+        Ok(v.to_bytes())
     }
 }
 
