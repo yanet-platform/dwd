@@ -204,7 +204,7 @@ where
     #[inline]
     async fn wait() {
         // TODO: park/unpark.
-        thread::sleep(Duration::from_micros(1));
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
 }
 
