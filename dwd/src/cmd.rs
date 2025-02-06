@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::{ArgAction, Parser};
 use pnet::ipnetwork::IpNetwork;
 
-use crate::engine::http::{payload::jsonline::JsonLinePayload, Config as HttpConfig};
+use crate::engine::http::{payload::jsonline::JsonLineRecord, Config as HttpConfig};
 
 /// The traffic generator we deserve.
 #[derive(Debug, Clone, Parser)]
@@ -84,7 +84,7 @@ impl TryFrom<HttpCmd> for HttpConfig {
 
         let requests = {
             if let Some(path) = payload_json {
-                JsonLinePayload::from_fs(path)?
+                JsonLineRecord::from_fs(path)?
             } else {
                 todo!();
             }

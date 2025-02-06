@@ -21,7 +21,7 @@ use serde::{
 ///
 /// Host inside "Headers" section will be silently ignored.
 #[derive(Debug, Deserialize)]
-pub struct JsonLinePayload {
+pub struct JsonLineRecord {
     #[serde(deserialize_with = "deserialize_http_uri")]
     uri: Uri,
     #[serde(deserialize_with = "deserialize_http_method")]
@@ -31,11 +31,12 @@ pub struct JsonLinePayload {
     headers: HeaderMap,
 }
 
-impl JsonLinePayload {
+impl JsonLineRecord {
     /// Loads HTTP requests in JSON ammo format from specified path.
-    pub fn from_fs<P>(path: P) -> Result<Vec<Request<Empty<Bytes>>>, Box<dyn Error>>
+    pub fn from_fs<P, T>(path: P) -> Result<Vec<T>, Box<dyn Error>>
     where
         P: AsRef<Path>,
+        T: TryFrom<JsonLineRecord, Error = Box<dyn Error>>,
     {
         log::debug!("loading HTTP requests from '{}' ...", path.as_ref().display());
 
@@ -45,24 +46,74 @@ impl JsonLinePayload {
         let mut requests = Vec::new();
         for line in rd.lines() {
             let line = line?;
-            let payload: JsonLinePayload = serde_json::from_str(&line)?;
-            let mut request = Request::builder()
-                .method(payload.method)
-                .uri(payload.uri)
-                .header(header::HOST, payload.host);
-
-            for (name, value) in payload.headers.into_iter() {
-                if let Some(name) = name {
-                    request = request.header(name, value);
-                }
-            }
-            let request = request.body(Empty::new())?;
-            log::debug!("loaded HTTP request: {:?}", request);
+            let record: JsonLineRecord = serde_json::from_str(&line)?;
+            let request = record.try_into()?;
 
             requests.push(request);
         }
 
         Ok(requests)
+    }
+
+    pub fn to_bytes(&self) -> Bytes {
+        let mut buf = Vec::with_capacity(128);
+
+        buf.extend_from_slice(self.method.as_str().as_bytes());
+        buf.push(b' ');
+        // URI is relative, which is enforced during deserialization.
+        buf.extend_from_slice(self.uri.path().as_bytes());
+
+        if let Some(query) = self.uri.query() {
+            buf.push(b'?');
+            buf.extend_from_slice(query.as_bytes());
+        }
+        buf.extend_from_slice(b" HTTP/1.1\r\n");
+
+        // Set "Host" header explicitly.
+        buf.extend_from_slice(b"Host: ");
+        buf.extend_from_slice(self.host.as_bytes());
+        buf.extend_from_slice(b"\r\n");
+
+        for (name, value) in &self.headers {
+            if name == header::HOST {
+                continue;
+            }
+
+            buf.extend_from_slice(name.as_str().as_bytes());
+            buf.extend_from_slice(b": ");
+            buf.extend_from_slice(value.as_bytes());
+            buf.extend_from_slice(b"\r\n");
+        }
+        buf.extend_from_slice(b"\r\n");
+
+        buf.into()
+    }
+}
+
+impl TryFrom<JsonLineRecord> for Request<Empty<Bytes>> {
+    type Error = Box<dyn Error>;
+
+    fn try_from(v: JsonLineRecord) -> Result<Self, Self::Error> {
+        let mut request = Request::builder()
+            .method(v.method)
+            .uri(v.uri)
+            .header(header::HOST, v.host);
+
+        for (name, value) in v.headers.into_iter() {
+            if let Some(name) = name {
+                request = request.header(name, value);
+            }
+        }
+        let request = request.body(Empty::new())?;
+
+        Ok(request)
+    }
+}
+
+impl From<JsonLineRecord> for Bytes {
+    #[inline]
+    fn from(v: JsonLineRecord) -> Self {
+        v.to_bytes()
     }
 }
 
