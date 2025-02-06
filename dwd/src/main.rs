@@ -7,7 +7,11 @@ use core::error::Error;
 
 use clap::Parser;
 use dwd::{cfg::Config, cmd::Cmd, engine::Runtime};
+use jemallocator::Jemalloc;
 use tokio::runtime::Builder;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 pub fn main() {
     let cmd = Cmd::parse();
