@@ -1,20 +1,98 @@
 use core::{
-    cell::UnsafeCell,
-    fmt::Display,
+    future::Future,
     net::SocketAddr,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Duration,
 };
-use std::{io::Error, net::UdpSocket, sync::Arc};
+use std::{net::UdpSocket, sync::Arc, thread};
 
+use anyhow::Error;
+
+use super::Config;
 use crate::{
     shaper::Shaper,
-    stat::{CommonStat, SocketStat, TxStat},
-    Produce,
+    stat::{PerCpuStat, SockWorkerStat, Stat, TxWorkerStat},
+    OneProduce, Produce,
 };
 
+type WorkerStat = PerCpuStat<TxWorkerStat, (), SockWorkerStat, ()>;
+type EngineStat = Stat<TxWorkerStat, (), SockWorkerStat, ()>;
+
 #[derive(Debug)]
-pub struct UdpWorker<B, D> {
+pub struct Engine {
+    cfg: Config,
+    /// RPS limits, per CPU.
+    limits: Vec<Arc<AtomicU64>>,
+    stat: Arc<EngineStat>,
+}
+
+impl Engine {
+    pub fn new(cfg: Config) -> Self {
+        let num_threads = cfg.native.threads.get();
+
+        let mut limits = Vec::with_capacity(num_threads);
+        let mut stats = Vec::new();
+        for _ in 0..num_threads {
+            limits.push(Arc::new(AtomicU64::new(0)));
+            stats.push(Arc::new(WorkerStat::default()));
+        }
+
+        let stat = Arc::new(EngineStat::new(stats));
+
+        Self { cfg, limits, stat }
+    }
+
+    #[inline]
+    pub fn limits(&self) -> Vec<Arc<AtomicU64>> {
+        self.limits.clone()
+    }
+
+    #[inline]
+    pub fn stat(&self) -> Arc<EngineStat> {
+        self.stat.clone()
+    }
+
+    pub fn run<F>(self, _stop: F, is_running: Arc<AtomicBool>) -> Result<(), Error>
+    where
+        F: Future<Output = ()> + 'static,
+    {
+        let num_threads = self.cfg.native.threads.into();
+        let mut threads = Vec::with_capacity(num_threads);
+
+        let bind = self.cfg.native.bind_endpoints.clone();
+        let data = Arc::new(OneProduce::new(b"GET / HTTP/1.1\r\n\r\n".to_vec()));
+
+        for (idx, thread_limits) in self.limits.clone().into_iter().enumerate() {
+            let thread = {
+                let mut worker = Worker::new(
+                    self.cfg.addr,
+                    bind.clone(),
+                    data.clone(),
+                    self.cfg.native.requests_per_socket(),
+                    thread_limits,
+                    is_running.clone(),
+                    self.stat.stats[idx].clone(),
+                );
+
+                thread::Builder::new()
+                    .name("dwd:w".into())
+                    .spawn(move || worker.run())?
+            };
+
+            threads.push(thread);
+        }
+
+        for thread in threads {
+            thread.join().expect("no self join");
+        }
+
+        Ok(())
+    }
+}
+
+/// Per-thread worker.
+#[derive(Debug)]
+pub struct Worker<B, D> {
     /// Target endpoint.
     addr: SocketAddr,
     /// Bind endpoints.
@@ -34,11 +112,19 @@ pub struct UdpWorker<B, D> {
     /// The shaper.
     shaper: Shaper,
     /// Runtime statistics.
-    stat: Arc<LocalStat>,
+    stat: Arc<WorkerStat>,
 }
 
-impl<B, D> UdpWorker<B, D> {
-    pub fn new(addr: SocketAddr, bind: B, data: D, is_running: Arc<AtomicBool>, limit: Arc<AtomicU64>) -> Self {
+impl<B, D> Worker<B, D> {
+    pub fn new(
+        addr: SocketAddr,
+        bind: B,
+        data: D,
+        requests_per_sock: u64,
+        limit: Arc<AtomicU64>,
+        is_running: Arc<AtomicBool>,
+        stat: Arc<WorkerStat>,
+    ) -> Self {
         let shaper = Shaper::new(0, limit);
 
         Self {
@@ -46,30 +132,21 @@ impl<B, D> UdpWorker<B, D> {
             bind,
             data,
             sock: None,
-            requests_per_sock: u64::MAX,
+            requests_per_sock,
             requests_per_sock_done: 0,
             is_running,
             shaper,
-            stat: Arc::new(LocalStat::default()),
+            stat,
         }
-    }
-
-    pub fn stat(&self) -> Arc<LocalStat> {
-        self.stat.clone()
-    }
-
-    pub fn with_requests_per_sock(mut self, requests_per_sock: u64) -> Self {
-        self.requests_per_sock = requests_per_sock;
-        self
     }
 }
 
-impl<B, D> UdpWorker<B, D>
+impl<B, D> Worker<B, D>
 where
     B: Produce<Item = SocketAddr>,
-    D: Produce<Item = [u8]>,
+    D: Produce<Item = Vec<u8>>,
 {
-    pub fn run(mut self) {
+    pub fn run(&mut self) {
         while self.is_running.load(Ordering::Relaxed) {
             match self.shaper.tick() {
                 0 => Self::wait(),
@@ -96,8 +173,8 @@ where
         // want to.
         let sock = match self.curr_sock() {
             Ok(sock) => sock,
-            Err(err) => {
-                self.stat.on_sock_err(&err);
+            Err(..) => {
+                self.stat.on_sock_err();
                 return;
             }
         };
@@ -115,8 +192,8 @@ where
                 self.stat.on_requests(1);
                 self.stat.on_send(data.len() as u64);
             }
-            Err(err) => {
-                self.stat.on_sock_err(&err);
+            Err(..) => {
+                self.stat.on_sock_err();
             }
         }
     }
@@ -145,87 +222,6 @@ where
 
     #[inline]
     fn wait() {
-        std::thread::sleep(Duration::from_micros(1));
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct LocalStat {
-    num_requests: UnsafeCell<u64>,
-    bytes_tx: UnsafeCell<u64>,
-    num_sock_created: UnsafeCell<u64>,
-    num_sock_errors: UnsafeCell<u64>,
-}
-
-unsafe impl Sync for LocalStat {}
-
-impl LocalStat {
-    #[inline]
-    pub fn on_requests(&self, n: u64) {
-        unsafe { *self.num_requests.get() += n };
-    }
-
-    #[inline]
-    pub fn on_send(&self, n: u64) {
-        unsafe { *self.bytes_tx.get() += n };
-    }
-
-    #[inline]
-    pub fn on_sock_created(&self) {
-        unsafe { *self.num_sock_created.get() += 1 };
-    }
-
-    #[inline]
-    pub fn on_sock_err<E: Display>(&self, err: &E) {
-        log::error!("{}", err);
-        unsafe { *self.num_sock_errors.get() += 1 };
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct Stat {
-    generator: AtomicU64,
-    stats: Vec<Arc<LocalStat>>,
-}
-
-impl Stat {
-    pub fn new(stats: Vec<Arc<LocalStat>>) -> Self {
-        Self { stats, ..Default::default() }
-    }
-}
-
-impl CommonStat for Stat {
-    #[inline]
-    fn generator(&self) -> u64 {
-        self.generator.load(Ordering::Relaxed)
-    }
-
-    #[inline]
-    fn on_generator(&self, v: u64) {
-        self.generator.store(v, Ordering::Relaxed);
-    }
-}
-
-impl TxStat for Stat {
-    #[inline]
-    fn num_requests(&self) -> u64 {
-        self.stats.iter().map(|v| unsafe { *v.num_requests.get() }).sum()
-    }
-
-    #[inline]
-    fn bytes_tx(&self) -> u64 {
-        self.stats.iter().map(|v| unsafe { *v.bytes_tx.get() }).sum()
-    }
-}
-
-impl SocketStat for Stat {
-    #[inline]
-    fn num_sock_created(&self) -> u64 {
-        self.stats.iter().map(|v| unsafe { *v.num_sock_created.get() }).sum()
-    }
-
-    #[inline]
-    fn num_sock_errors(&self) -> u64 {
-        self.stats.iter().map(|v| unsafe { *v.num_sock_errors.get() }).sum()
+        thread::sleep(Duration::from_micros(1));
     }
 }

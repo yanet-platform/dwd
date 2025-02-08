@@ -21,17 +21,19 @@ use crate::{
     worker::dpdk::{DpdkWorkerGroup, Stat as DpdkStat},
 };
 use crate::{
-    cfg::{Config, ModeConfig, UdpConfig},
-    engine::http::{Engine as HttpEngine, EngineRaw as HttpEngineRaw},
+    cfg::{Config, ModeConfig},
+    engine::{
+        http::{Engine as HttpEngine, EngineRaw as HttpEngineRaw},
+        udp::Engine as UdpEngine,
+    },
     generator::{Generator, SuspendableGenerator},
-    sockbind::SocketAddrGen,
     stat::CommonStat,
     ui::{self, Ui},
-    worker::udp::{Stat as UdpStat, UdpWorker},
     GeneratorEvent, Produce,
 };
 
 pub mod http;
+pub mod udp;
 
 struct Buffer(Vec<u8>);
 
@@ -137,38 +139,16 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn run_udp(self, cfg: UdpConfig) -> Result<(), Box<dyn Error>> {
-        let num_threads = cfg.native.threads.into();
-        let mut threads = Vec::with_capacity(num_threads);
+    pub async fn run_udp(self, cfg: udp::Config) -> Result<(), Box<dyn Error>> {
+        let engine = UdpEngine::new(cfg);
+        let stat = engine.stat();
+        let limits = engine.limits();
 
-        let bind = Arc::new(SocketAddrGen::unspecified6());
-        let data = Arc::new(Buffer(b"GET / HTTP/1.1\r\n\r\n".to_vec()));
-        let mut stats = Vec::new();
-        let mut limits = Vec::new();
+        let engine = {
+            let is_running = self.is_running.clone();
+            Builder::new().spawn(move || engine.run(future::pending(), is_running))?
+        };
 
-        for _ in 0..num_threads {
-            let limit = Arc::new(AtomicU64::new(0));
-
-            let thread = {
-                let worker = UdpWorker::new(
-                    cfg.addr,
-                    bind.clone(),
-                    data.clone(),
-                    self.is_running.clone(),
-                    limit.clone(),
-                )
-                .with_requests_per_sock(cfg.native.requests_per_socket());
-
-                stats.push(worker.stat());
-
-                Builder::new().name("dwd:worker".into()).spawn(move || worker.run())?
-            };
-
-            limits.push(limit);
-            threads.push(thread);
-        }
-
-        let stat = Arc::new(UdpStat::new(stats));
         let (tx, rx) = mpsc::channel(1);
 
         let ui = Ui::new(tx).with_tx(stat.clone()).with_sock(stat.clone());
@@ -178,10 +158,7 @@ impl Runtime {
         shaper?;
 
         ui.join().expect("no self join").unwrap();
-
-        for thread in threads {
-            thread.join().expect("no self join");
-        }
+        engine.join().expect("no self join")?;
 
         Ok(())
     }

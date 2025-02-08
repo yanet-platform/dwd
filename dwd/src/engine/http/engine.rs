@@ -89,7 +89,7 @@ impl Engine {
                 );
 
                 thread::Builder::new()
-                    .name(format!("dwd:{idx:02}"))
+                    .name("dwd:w".into())
                     .spawn(move || worker.run())?
             };
 

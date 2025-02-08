@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use clap::{ArgAction, Parser};
 use pnet::ipnetwork::IpNetwork;
 
-use crate::engine::http::{payload::jsonline::JsonLineRecord, Config as HttpConfig};
+use crate::engine::{
+    http::{payload::jsonline::JsonLineRecord, Config as HttpConfig},
+    udp::Config as UdpConfig,
+};
 
 /// The traffic generator we deserve.
 #[derive(Debug, Clone, Parser)]
@@ -123,6 +126,20 @@ pub struct UdpCmd {
     /// Native workload settings.
     #[clap(flatten)]
     pub native: NativeLoadCmd,
+}
+
+impl TryFrom<UdpCmd> for UdpConfig {
+    type Error = Box<dyn Error>;
+
+    fn try_from(v: UdpCmd) -> Result<Self, Self::Error> {
+        let UdpCmd { addr, native } = v;
+
+        let native = native.try_into()?;
+
+        let m = Self { addr, native };
+
+        Ok(m)
+    }
 }
 
 /// Native workload config.

@@ -8,7 +8,6 @@ mod generator;
 mod histogram;
 pub mod logging;
 mod shaper;
-mod sockbind;
 mod stat;
 mod ui;
 mod worker;
@@ -25,6 +24,29 @@ trait Produce {
 
     /// Advances this producer and returns the next value.
     fn next(&self) -> &Self::Item;
+}
+
+/// Infinice cycle producing iterator, that yields the same value.
+#[derive(Debug)]
+pub struct OneProduce<T> {
+    v: T,
+}
+
+impl<T> OneProduce<T> {
+    /// Constructs a new [`OneProduce`] from the given value.
+    #[inline]
+    pub const fn new(v: T) -> Self {
+        Self { v }
+    }
+}
+
+impl<T> Produce for Arc<OneProduce<T>> {
+    type Item = T;
+
+    #[inline]
+    fn next(&self) -> &Self::Item {
+        &self.v
+    }
 }
 
 /// Thread-safe infinite cycle producing iterator over the given vector.

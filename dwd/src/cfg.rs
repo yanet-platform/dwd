@@ -24,8 +24,8 @@ use {
 };
 
 use crate::{
-    cmd::{Cmd, ModeCmd, NativeLoadCmd, UdpCmd},
-    engine::http::Config as HttpConfig,
+    cmd::{Cmd, ModeCmd, NativeLoadCmd},
+    engine::{http::Config as HttpConfig, udp::Config as UdpConfig},
     generator::{self, Generator, LineGenerator},
     VecProduce,
 };
@@ -86,26 +86,6 @@ impl TryFrom<ModeCmd> for ModeConfig {
             #[cfg(feature = "dpdk")]
             ModeCmd::Dpdk(v) => Self::Dpdk(v.try_into()?),
         };
-
-        Ok(m)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct UdpConfig {
-    /// Target endpoint.
-    pub addr: SocketAddr,
-    /// Native workload settings.
-    pub native: NativeLoadConfig,
-}
-
-impl TryFrom<UdpCmd> for UdpConfig {
-    type Error = Box<dyn Error>;
-
-    fn try_from(v: UdpCmd) -> Result<Self, Self::Error> {
-        let native = v.native.try_into()?;
-
-        let m = Self { addr: v.addr, native };
 
         Ok(m)
     }

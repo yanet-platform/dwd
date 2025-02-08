@@ -85,7 +85,7 @@ impl EngineRaw {
                 );
 
                 thread::Builder::new()
-                    .name("dwd:worker".into())
+                    .name("dwd:w".into())
                     .spawn(move || worker.run())?
             };
 
