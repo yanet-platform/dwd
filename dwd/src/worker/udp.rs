@@ -38,13 +38,7 @@ pub struct UdpWorker<B, D> {
 }
 
 impl<B, D> UdpWorker<B, D> {
-    pub fn new(
-        addr: SocketAddr,
-        bind: B,
-        data: D,
-        is_running: Arc<AtomicBool>,
-        limit: Arc<AtomicU64>,
-    ) -> Self {
+    pub fn new(addr: SocketAddr, bind: B, data: D, is_running: Arc<AtomicBool>, limit: Arc<AtomicU64>) -> Self {
         let shaper = Shaper::new(0, limit);
 
         Self {
@@ -67,7 +61,7 @@ impl<B, D> UdpWorker<B, D> {
     pub fn with_requests_per_sock(mut self, requests_per_sock: u64) -> Self {
         self.requests_per_sock = requests_per_sock;
         self
-    }    
+    }
 }
 
 impl<B, D> UdpWorker<B, D>

@@ -10,6 +10,9 @@ use std::{
     sync::Arc,
 };
 
+use bytes::Bytes;
+use http::Request;
+use http_body_util::Empty;
 #[cfg(feature = "dpdk")]
 use {
     crate::{
@@ -65,7 +68,8 @@ impl TryFrom<Cmd> for Config {
 
 #[derive(Debug, Clone)]
 pub enum ModeConfig {
-    Http(HttpConfig),
+    Http(HttpConfig<Request<Empty<Bytes>>>),
+    HttpRaw(HttpConfig<Bytes>),
     Udp(UdpConfig),
     #[cfg(feature = "dpdk")]
     Dpdk(DpdkConfig),
@@ -77,6 +81,7 @@ impl TryFrom<ModeCmd> for ModeConfig {
     fn try_from(v: ModeCmd) -> Result<Self, Self::Error> {
         let m = match v {
             ModeCmd::Http(v) => Self::Http(v.try_into()?),
+            ModeCmd::HttpRaw(v) => Self::HttpRaw(v.cmd.try_into()?),
             ModeCmd::Udp(v) => Self::Udp(v.try_into()?),
             #[cfg(feature = "dpdk")]
             ModeCmd::Dpdk(v) => Self::Dpdk(v.try_into()?),

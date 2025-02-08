@@ -112,6 +112,7 @@ impl Ui {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_burst_tx<S>(mut self, stat: Arc<S>) -> Self
     where
         S: BurstTxStat + Send + Sync + 'static,

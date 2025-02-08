@@ -10,6 +10,9 @@ use std::{
     thread::{self, Builder, JoinHandle},
 };
 
+use bytes::Bytes;
+use http_body_util::Empty;
+use hyper::Request;
 use tokio::sync::mpsc::{self, Receiver};
 
 #[cfg(feature = "dpdk")]
@@ -19,7 +22,7 @@ use crate::{
 };
 use crate::{
     cfg::{Config, ModeConfig, UdpConfig},
-    engine::http::Engine as HttpEngine,
+    engine::http::{Engine as HttpEngine, EngineRaw as HttpEngineRaw},
     generator::{Generator, SuspendableGenerator},
     sockbind::SocketAddrGen,
     stat::CommonStat,
@@ -61,6 +64,9 @@ impl Runtime {
             ModeConfig::Http(cfg) => {
                 self.run_http(cfg).await?;
             }
+            ModeConfig::HttpRaw(cfg) => {
+                self.run_http_raw(cfg).await?;
+            }
             ModeConfig::Udp(cfg) => {
                 self.run_udp(cfg).await?;
             }
@@ -73,8 +79,37 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn run_http(self, cfg: http::Config) -> Result<(), Box<dyn Error>> {
+    pub async fn run_http(self, cfg: http::Config<Request<Empty<Bytes>>>) -> Result<(), Box<dyn Error>> {
         let engine = HttpEngine::new(cfg);
+        let stat = engine.stat();
+        let limits = engine.limits().into_iter().flatten().collect();
+
+        let engine = {
+            let is_running = self.is_running.clone();
+            Builder::new().spawn(move || engine.run(future::pending(), is_running))?
+        };
+
+        let (tx, rx) = mpsc::channel(1);
+
+        let ui = Ui::new(tx)
+            .with_tx(stat.clone())
+            .with_rx(stat.clone())
+            .with_http(stat.clone())
+            .with_sock(stat.clone())
+            .with_rx_timings(stat.clone());
+        let ui = self.run_ui(ui)?;
+
+        let (shaper,) = tokio::join!(self.run_generator(limits, stat.clone(), rx));
+        shaper?;
+
+        ui.join().expect("no self join").unwrap();
+        engine.join().expect("no self join")?;
+
+        Ok(())
+    }
+
+    pub async fn run_http_raw(self, cfg: http::Config<Bytes>) -> Result<(), Box<dyn Error>> {
+        let engine = HttpEngineRaw::new(cfg);
         let stat = engine.stat();
         let limits = engine.limits().into_iter().flatten().collect();
 
@@ -111,7 +146,7 @@ impl Runtime {
         let mut stats = Vec::new();
         let mut limits = Vec::new();
 
-        for idx in 0..num_threads {
+        for _ in 0..num_threads {
             let limit = Arc::new(AtomicU64::new(0));
 
             let thread = {
@@ -126,9 +161,7 @@ impl Runtime {
 
                 stats.push(worker.stat());
 
-                Builder::new()
-                    .name(format!("dwd:{idx:02}"))
-                    .spawn(move || worker.run())?
+                Builder::new().name("dwd:worker".into()).spawn(move || worker.run())?
             };
 
             limits.push(limit);

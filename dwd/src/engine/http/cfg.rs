@@ -1,14 +1,10 @@
 use core::{net::SocketAddr, num::NonZero};
 
-use bytes::Bytes;
-use http::Request;
-use http_body_util::Empty;
-
 use crate::cfg::NativeLoadConfig;
 
 /// HTTP engine config.
 #[derive(Debug, Clone)]
-pub struct Config {
+pub struct Config<T> {
     /// Target endpoint.
     pub addr: SocketAddr,
     /// Number of parallel jobs.
@@ -24,5 +20,5 @@ pub struct Config {
     /// Enable SOCK_NODELAY socket option.
     pub tcp_no_delay: bool,
     /// Requests to send.
-    pub requests: Vec<Request<Empty<Bytes>>>,
+    pub requests: Vec<T>,
 }

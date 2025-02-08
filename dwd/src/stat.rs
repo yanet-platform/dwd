@@ -1,4 +1,7 @@
+pub use self::percpu::{HttpWorkerStat, PerCpuStat, RxWorkerStat, SockWorkerStat, Stat, TxWorkerStat};
 use crate::histogram::LogHistogram;
+
+mod percpu;
 
 pub trait CommonStat {
     fn generator(&self) -> u64;
@@ -10,6 +13,7 @@ pub trait TxStat {
     fn bytes_tx(&self) -> u64;
 }
 
+#[allow(dead_code)]
 pub trait BurstTxStat {
     fn num_bursts_tx(&self, idx: usize) -> u64;
 }
@@ -18,8 +22,7 @@ pub trait RxStat {
     fn num_responses(&self) -> u64;
     fn num_timeouts(&self) -> u64;
     fn bytes_rx(&self) -> u64;
-
-    fn hist(&self) -> &LogHistogram;
+    fn hist(&self) -> LogHistogram;
 }
 
 pub trait SocketStat {

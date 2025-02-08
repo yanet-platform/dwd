@@ -26,6 +26,9 @@ pub struct Cmd {
 pub enum ModeCmd {
     /// HTTP mode.
     Http(HttpCmd),
+    /// Fast, but restricted HTTP mode.
+    #[command(name = "http/raw")]
+    HttpRaw(HttpRawCmd),
     /// UDP mode.
     ///
     /// Response packets (if any) will be ignored.
@@ -41,6 +44,12 @@ pub enum ModeCmd {
     /// Note, that this mode requires the application to be run with CAP_ADMIN
     /// capabilities.
     Dpdk(DpdkCmd),
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct HttpRawCmd {
+    #[clap(flatten)]
+    pub cmd: HttpCmd,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -69,7 +78,10 @@ pub struct HttpCmd {
     pub tcp_no_delay: bool,
 }
 
-impl TryFrom<HttpCmd> for HttpConfig {
+impl<T> TryFrom<HttpCmd> for HttpConfig<T>
+where
+    T: TryFrom<JsonLineRecord, Error = Box<dyn Error>>,
+{
     type Error = Box<dyn Error>;
 
     fn try_from(cmd: HttpCmd) -> Result<Self, Self::Error> {
@@ -126,6 +138,7 @@ pub struct NativeLoadCmd {
     pub requests_per_socket: Option<u64>,
     /// IP prefix used to collect this machine's global unicast IP addresses and
     /// use them as bind addresses.
+    ///
     /// For example, specifying "2a02:6b8:0:320:1111:1111:1111::/112" will scan
     /// all interfaces, collect all global unicast IP addresses and filter
     /// them by the given prefix. This option conflicts with the "bind-ips"

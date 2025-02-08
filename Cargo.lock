@@ -371,6 +371,7 @@ dependencies = [
  "etherparse",
  "http",
  "http-body-util",
+ "httparse",
  "hyper",
  "jemallocator",
  "libc",

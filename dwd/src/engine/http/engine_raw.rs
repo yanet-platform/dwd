@@ -4,23 +4,18 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Duration,
 };
-use std::{
-    os::fd::{AsFd, AsRawFd, RawFd},
-    sync::Arc,
-    thread,
-    time::Instant,
-};
+use std::{sync::Arc, thread, time::Instant};
 
 use anyhow::Error;
-use bytes::Bytes;
-use http::Request;
-use http_body_util::{BodyExt, Empty};
-use hyper::client::conn::http1::{self, SendRequest};
-use tokio::{net::TcpSocket, runtime::Builder};
+use bytes::{Bytes, BytesMut};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpSocket, TcpStream},
+    runtime::Builder,
+};
 
 use super::cfg::Config;
 use crate::{
-    engine::http::io::TokioIo,
     shaper::Shaper,
     stat::{HttpWorkerStat, PerCpuStat, RxWorkerStat, SockWorkerStat, Stat, TxWorkerStat},
     Produce, VecProduce,
@@ -29,15 +24,16 @@ use crate::{
 type WorkerStat = PerCpuStat<TxWorkerStat, RxWorkerStat, SockWorkerStat, HttpWorkerStat>;
 type EngineStat = Stat<TxWorkerStat, RxWorkerStat, SockWorkerStat, HttpWorkerStat>;
 
+// TODO: it is possible to unify with `Engine`.
 #[derive(Debug)]
-pub struct Engine {
-    cfg: Config<Request<Empty<Bytes>>>,
+pub struct EngineRaw {
+    cfg: Config<Bytes>,
     limits: Vec<Vec<Arc<AtomicU64>>>,
     stat: Arc<EngineStat>,
 }
 
-impl Engine {
-    pub fn new(cfg: Config<Request<Empty<Bytes>>>) -> Self {
+impl EngineRaw {
+    pub fn new(cfg: Config<Bytes>) -> Self {
         let num_jobs = cfg.concurrency.get();
         let mut limits = vec![Vec::new(); cfg.native.threads.get()];
         let mut stats = Vec::new();
@@ -89,7 +85,7 @@ impl Engine {
                 );
 
                 thread::Builder::new()
-                    .name(format!("dwd:{idx:02}"))
+                    .name("dwd:worker".into())
                     .spawn(move || worker.run())?
             };
 
@@ -107,7 +103,7 @@ impl Engine {
 /// Per-thread worker.
 #[derive(Debug)]
 struct Worker<B, D> {
-    cfg: Config<Request<Empty<Bytes>>>,
+    cfg: Config<Bytes>,
     /// Bind endpoints.
     bind: B,
     /// Data to send.
@@ -119,7 +115,7 @@ struct Worker<B, D> {
 
 impl<B, D> Worker<B, D> {
     pub fn new(
-        cfg: Config<Request<Empty<Bytes>>>,
+        cfg: Config<Bytes>,
         bind: B,
         data: D,
         limits: Vec<Arc<AtomicU64>>,
@@ -140,7 +136,7 @@ impl<B, D> Worker<B, D> {
 impl<B, D> Worker<B, D>
 where
     B: Produce<Item = SocketAddr> + Clone + Send + Sync + 'static,
-    D: Produce<Item = Request<Empty<Bytes>>> + Clone + Send + Sync + 'static,
+    D: Produce<Item = Bytes> + Clone + Send + Sync + 'static,
 {
     pub fn run(&mut self) -> Result<(), Error> {
         let runtime = Builder::new_current_thread().enable_all().build()?;
@@ -194,7 +190,7 @@ impl<B, D> ShapedCoroWorker<B, D> {
 impl<B, D> ShapedCoroWorker<B, D>
 where
     B: Produce<Item = SocketAddr>,
-    D: Produce<Item = Request<Empty<Bytes>>>,
+    D: Produce<Item = Bytes>,
 {
     pub async fn run(&mut self) {
         while self.is_running.load(Ordering::Relaxed) {
@@ -231,6 +227,8 @@ struct CoroWorker<B, D> {
     data: D,
     /// Current TCP socket.
     stream: Option<TcpStream>,
+    /// Response buffer.
+    buf: BytesMut,
     /// The number of requests after which the socket will be recreated.
     requests_per_sock: u64,
     /// Number of requests done for the currently active socket.
@@ -262,6 +260,7 @@ impl<B, D> CoroWorker<B, D> {
             bind,
             data,
             stream: None,
+            buf: BytesMut::with_capacity(4096),
             requests_per_sock,
             requests_per_sock_done: 0,
             timeout: Duration::from_secs(4),
@@ -275,7 +274,7 @@ impl<B, D> CoroWorker<B, D> {
 impl<B, D> CoroWorker<B, D>
 where
     B: Produce<Item = SocketAddr>,
-    D: Produce<Item = Request<Empty<Bytes>>>,
+    D: Produce<Item = Bytes>,
 {
     #[inline]
     pub async fn execute(&mut self) {
@@ -315,36 +314,37 @@ where
 
         self.requests_per_sock_done += 1;
         if self.requests_per_sock_done < self.requests_per_sock {
-            if self.requests_per_sock_done % 32 == 0 {
-                self.update_stats(&mut sock);
-            }
             self.stream = Some(sock);
         } else {
             self.requests_per_sock_done = 0;
-            self.update_stats(&mut sock);
         }
     }
 
     #[inline]
     async fn perform_request(&mut self, stream: &mut TcpStream) -> Result<u16, Error> {
-        let req = self.data.next();
-        let mut resp = stream.sender.send_request(req.clone()).await?;
+        let request = self.data.next();
+        stream.write_all(request).await?;
         self.stat.on_requests(1);
+        self.stat.on_send(request.len() as u64);
 
-        let code = resp.status().as_u16();
-        while let Some(next) = resp.frame().await {
-            next?;
+        self.buf.clear();
+        loop {
+            let n_read = stream.read_buf(&mut self.buf).await?;
+
+            let mut headers = [httparse::EMPTY_HEADER; 8];
+            let mut resp = httparse::Response::new(&mut headers);
+            let parsed = resp.parse(&self.buf)?;
+            if !parsed.is_complete() {
+                continue;
+            }
+            // todo: read body, otherwise it hangs if the body doesn't fit in a single
+            // packet.
+
+            let code = resp.code.unwrap_or(0);
+            self.stat.on_recv(n_read as u64);
+
+            return Ok(code);
         }
-
-        Ok(code)
-    }
-
-    #[inline]
-    fn update_stats(&mut self, stream: &mut TcpStream) {
-        let tcpi = get_tcp_info(stream.fd);
-        self.stat.on_send(tcpi.bytes_acked - stream.tcp_info.bytes_acked);
-        self.stat.on_recv(tcpi.bytes_received - stream.tcp_info.bytes_received);
-        stream.tcp_info = tcpi;
     }
 
     #[inline]
@@ -365,7 +365,6 @@ where
             SocketAddr::V6(..) => TcpSocket::new_v6()?,
         };
         sock.bind(*addr)?;
-        let fd = sock.as_fd().as_raw_fd();
 
         let stream = sock.connect(self.addr).await?;
         if self.tcp_no_delay {
@@ -376,118 +375,6 @@ where
         }
         self.stat.on_sock_created();
 
-        let io = TokioIo::new(stream);
-        let (sender, conn) = http1::handshake(io).await?;
-        tokio::task::spawn(async move {
-            if let Err(err) = conn.await {
-                log::error!("connection failed: {err}");
-            }
-        });
-
-        let stream = TcpStream::new(fd, sender);
-
         Ok(stream)
     }
-}
-
-#[derive(Debug)]
-struct TcpStream {
-    fd: RawFd,
-    sender: SendRequest<Empty<Bytes>>,
-    tcp_info: TcpInfo,
-}
-
-impl TcpStream {
-    pub fn new(fd: RawFd, sender: SendRequest<Empty<Bytes>>) -> Self {
-        Self {
-            fd,
-            sender,
-            tcp_info: TcpInfo::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct TcpInfo {
-    pub bytes_acked: u64,
-    pub bytes_received: u64,
-}
-
-#[cfg(target_os = "linux")]
-fn get_tcp_info(fd: RawFd) -> TcpInfo {
-    #[repr(C)]
-    #[derive(Debug, Clone, Default)]
-    struct tcp_info {
-        pub tcpi_state: u8,
-        pub tcpi_ca_state: u8,
-        pub tcpi_retransmits: u8,
-        pub tcpi_probes: u8,
-        pub tcpi_backoff: u8,
-        pub tcpi_options: u8,
-        /// This contains the bitfields `tcpi_snd_wscale` and
-        /// `tcpi_rcv_wscale`. Each is 4 bits.
-        pub tcpi_snd_rcv_wscale: u8,
-        pub tcpi_rto: u32,
-        pub tcpi_ato: u32,
-        pub tcpi_snd_mss: u32,
-        pub tcpi_rcv_mss: u32,
-        pub tcpi_unacked: u32,
-        pub tcpi_sacked: u32,
-        pub tcpi_lost: u32,
-        pub tcpi_retrans: u32,
-        pub tcpi_fackets: u32,
-        pub tcpi_last_data_sent: u32,
-        pub tcpi_last_ack_sent: u32,
-        pub tcpi_last_data_recv: u32,
-        pub tcpi_last_ack_recv: u32,
-        pub tcpi_pmtu: u32,
-        pub tcpi_rcv_ssthresh: u32,
-        pub tcpi_rtt: u32,
-        pub tcpi_rttvar: u32,
-        pub tcpi_snd_ssthresh: u32,
-        pub tcpi_snd_cwnd: u32,
-        pub tcpi_advmss: u32,
-        pub tcpi_reordering: u32,
-        pub tcpi_rcv_rtt: u32,
-        pub tcpi_rcv_space: u32,
-        pub tcpi_total_retrans: u32,
-
-        pub tcpi_pacing_rate: u64,
-        pub tcpi_max_pacing_rate: u64,
-        pub tcpi_bytes_acked: u64,
-        pub tcpi_bytes_received: u64,
-        pub tcpi_segs_out: u32,
-        pub tcpi_segs_in: u32,
-        pub tcpi_notsent_bytes: u32,
-        pub tcpi_min_rtt: u32,
-        pub tcpi_data_segs_in: u32,
-        pub tcpi_data_segs_out: u32,
-        pub tcpi_delivery_rate: u64,
-        pub tcpi_busy_time: u64,
-        pub tcpi_rwnd_limited: u64,
-        pub tcpi_sndbuf_limited: u64,
-    }
-    let mut info = tcp_info::default();
-    let mut len = core::mem::size_of_val(&info) as libc::socklen_t;
-    unsafe {
-        _ = libc::getsockopt(
-            fd,
-            libc::SOL_TCP,
-            libc::TCP_INFO,
-            &mut info as *mut tcp_info as *mut libc::c_void,
-            &mut len as *mut u32,
-        );
-    }
-
-    let info = TcpInfo {
-        bytes_acked: info.tcpi_bytes_acked,
-        bytes_received: info.tcpi_bytes_received,
-    };
-
-    return info;
-}
-
-#[cfg(not(target_os = "linux"))]
-fn get_tcp_info(_fd: RawFd) -> TcpInfo {
-    TcpInfo::default()
 }

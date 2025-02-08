@@ -55,7 +55,8 @@ impl JsonLineRecord {
         Ok(requests)
     }
 
-    pub fn to_bytes(&self) -> Bytes {
+    /// Returns this [`JsonLineRecord`] as a raw HTTP request.
+    pub fn to_vec(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(128);
 
         buf.extend_from_slice(self.method.as_str().as_bytes());
@@ -86,7 +87,7 @@ impl JsonLineRecord {
         }
         buf.extend_from_slice(b"\r\n");
 
-        buf.into()
+        buf
     }
 }
 
@@ -115,7 +116,7 @@ impl TryFrom<JsonLineRecord> for Bytes {
 
     #[inline]
     fn try_from(v: JsonLineRecord) -> Result<Self, Self::Error> {
-        Ok(v.to_bytes())
+        Ok(v.to_vec().into())
     }
 }
 

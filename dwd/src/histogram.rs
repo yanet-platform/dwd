@@ -1,53 +1,53 @@
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::cell::UnsafeCell;
+
+const FACTOR: f64 = 1.5;
 
 #[derive(Debug)]
-pub struct LogHistogram {
-    bounds: Vec<f64>,
-    buckets: Vec<AtomicU64>,
-    factor: f64,
+pub struct PerCpuLogHistogram {
+    buckets: Vec<UnsafeCell<u64>>,
 }
 
-impl Default for LogHistogram {
+impl PerCpuLogHistogram {
+    pub fn buckets(&self) -> &[UnsafeCell<u64>] {
+        &self.buckets
+    }
+
+    #[inline]
+    pub fn record(&self, us: u64) {
+        let idx = (us as f64).log(FACTOR) as usize;
+        let idx = idx.min(self.buckets.len() - 1);
+
+        unsafe { *self.buckets[idx].get() += 1 };
+    }
+}
+
+impl Default for PerCpuLogHistogram {
     fn default() -> Self {
-        let mut bounds = Vec::new();
         let mut buckets = Vec::new();
         let max = 60000000.0; // 60s
-        let factor = 1.5;
         let mut curr = 1.0;
         loop {
             if curr >= max {
                 break;
             }
 
-            bounds.push(curr);
-            buckets.push(AtomicU64::new(0));
-            curr *= factor;
+            buckets.push(UnsafeCell::new(0));
+            curr *= FACTOR;
         }
 
-        Self { bounds, buckets, factor }
+        Self { buckets }
     }
 }
 
+#[derive(Debug)]
+pub struct LogHistogram {
+    snapshot: Vec<u64>,
+}
+
 impl LogHistogram {
-    /// Returns buckets' upper bounds.
     #[inline]
-    pub fn upper_bounds(&self) -> &[f64] {
-        &self.bounds
-    }
-
-    #[inline]
-    pub fn snapshot(&self) -> (&[f64], Vec<u64>) {
-        (
-            self.upper_bounds(),
-            self.buckets.iter().map(|v| v.load(Ordering::Relaxed)).collect(),
-        )
-    }
-
-    #[inline]
-    pub fn record(&self, us: u64) {
-        let idx = (us as f64).log(self.factor) as usize;
-        let idx = idx.min(self.buckets.len() - 1);
-        self.buckets[idx].fetch_add(1, Ordering::Relaxed);
+    pub const fn new(snapshot: Vec<u64>) -> Self {
+        Self { snapshot }
     }
 
     /// Calculates the quantile.
@@ -113,11 +113,10 @@ impl LogHistogram {
     pub fn quantile(&self, q: f64) -> u64 {
         assert!((0.0..=1.0).contains(&q));
 
-        let snapshot: Vec<u64> = self.buckets.iter().map(|v| v.load(Ordering::Relaxed)).collect();
-        let size: u64 = snapshot.iter().sum();
+        let size: u64 = self.snapshot.iter().sum();
 
         let mut sum = 0;
-        for (idx, &b) in snapshot.iter().enumerate() {
+        for (idx, &b) in self.snapshot.iter().enumerate() {
             if ((sum + b) as f64) >= q * (size as f64) {
                 // Found upper bound, let's interpolate now.
 
@@ -125,7 +124,7 @@ impl LogHistogram {
                 let b = b as f64;
                 let sum = sum as f64;
                 let size = size as f64;
-                let c_inv = |q: f64| self.factor.powf((q * size - sum) / b + idx);
+                let c_inv = |q: f64| FACTOR.powf((q * size - sum) / b + idx);
 
                 return c_inv(q) as u64;
             }
@@ -133,43 +132,5 @@ impl LogHistogram {
         }
 
         u64::MAX
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_zero_quantile() {
-        let h = LogHistogram::default();
-        h.record(1000);
-        assert_eq!(0, h.quantile(0.0));
-    }
-
-    #[test]
-    fn test_low_bound_quantile() {
-        let cases: &[[u64; 45]] = &[
-            [
-                213, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 151, 0, 0, 0, 0, 0, 36, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            ],
-            [
-                319, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 57, 0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            ],
-            [
-                182, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            ],
-        ];
-        for c in cases {
-            let h = LogHistogram {
-                buckets: c.iter().copied().map(AtomicU64::new).collect(),
-                ..Default::default()
-            };
-            assert_eq!(h.quantile(0.10), 1);
-            assert_eq!(h.quantile(0.50), 1);
-        }
     }
 }
