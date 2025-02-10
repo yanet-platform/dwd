@@ -1,10 +1,14 @@
 use core::{
     future::Future,
     net::SocketAddr,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64},
     time::Duration,
 };
-use std::{sync::Arc, thread, time::Instant};
+use std::{
+    sync::Arc,
+    thread::{self},
+    time::Instant,
+};
 
 use anyhow::Error;
 use bytes::{Bytes, BytesMut};
@@ -16,6 +20,7 @@ use tokio::{
 
 use super::cfg::Config;
 use crate::{
+    engine::{coro::ShapedCoroWorker, Task},
     shaper::Shaper,
     stat::{HttpWorkerStat, PerCpuStat, RxWorkerStat, SockWorkerStat, Stat, TxWorkerStat},
     Produce, VecProduce,
@@ -167,52 +172,6 @@ where
             }
             Ok(())
         })
-    }
-}
-
-/// Shaped per-task worker.
-#[derive(Debug)]
-struct ShapedCoroWorker<B, D> {
-    /// Per-task worker.
-    worker: CoroWorker<B, D>,
-    /// Whether this worker is still active.
-    is_running: Arc<AtomicBool>,
-    /// The shaper.
-    shaper: Shaper,
-}
-
-impl<B, D> ShapedCoroWorker<B, D> {
-    pub fn new(worker: CoroWorker<B, D>, shaper: Shaper, is_running: Arc<AtomicBool>) -> Self {
-        Self { worker, shaper, is_running }
-    }
-}
-
-impl<B, D> ShapedCoroWorker<B, D>
-where
-    B: Produce<Item = SocketAddr>,
-    D: Produce<Item = Bytes>,
-{
-    pub async fn run(&mut self) {
-        while self.is_running.load(Ordering::Relaxed) {
-            match self.shaper.tick() {
-                0 => Self::wait().await,
-                mut n => {
-                    n = n.min(32);
-
-                    for _ in 0..n {
-                        self.worker.execute().await;
-                    }
-
-                    self.shaper.consume(n);
-                }
-            }
-        }
-    }
-
-    #[inline]
-    async fn wait() {
-        // TODO: park/unpark.
-        tokio::time::sleep(Duration::from_millis(1)).await;
     }
 }
 
@@ -376,5 +335,16 @@ where
         self.stat.on_sock_created();
 
         Ok(stream)
+    }
+}
+
+impl<B, D> Task for CoroWorker<B, D>
+where
+    B: Produce<Item = SocketAddr>,
+    D: Produce<Item = Bytes>,
+{
+    #[inline]
+    async fn execute(&mut self) {
+        Self::execute(self).await
     }
 }

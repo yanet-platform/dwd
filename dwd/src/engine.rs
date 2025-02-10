@@ -32,8 +32,15 @@ use crate::{
     GeneratorEvent, Produce,
 };
 
+mod coro;
 pub mod http;
 pub mod udp;
+
+/// Task unit.
+trait Task {
+    /// Executes this task once.
+    async fn execute(&mut self);
+}
 
 struct Buffer(Vec<u8>);
 
