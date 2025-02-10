@@ -1,12 +1,11 @@
 use core::{
-    ops::Deref,
-    sync::atomic::{AtomicBool, Ordering},
+    future,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Duration,
 };
 use std::{
     error::Error,
-    future,
-    sync::{atomic::AtomicU64, Arc},
+    sync::Arc,
     thread::{self, Builder, JoinHandle},
 };
 
@@ -29,7 +28,7 @@ use crate::{
     generator::{Generator, SuspendableGenerator},
     stat::CommonStat,
     ui::{self, Ui},
-    GeneratorEvent, Produce,
+    GeneratorEvent,
 };
 
 mod coro;
@@ -40,19 +39,6 @@ pub mod udp;
 trait Task {
     /// Executes this task once.
     async fn execute(&mut self);
-}
-
-struct Buffer(Vec<u8>);
-
-impl Produce for Arc<Buffer> {
-    type Item = [u8];
-
-    #[inline]
-    fn next(&self) -> &Self::Item {
-        match self.deref() {
-            Buffer(buf) => buf,
-        }
-    }
 }
 
 #[derive(Debug)]
