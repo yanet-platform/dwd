@@ -4,7 +4,6 @@ use std::thread::Builder;
 use anyhow::Error;
 use tokio::runtime::LocalRuntime;
 
-///
 #[derive(Debug)]
 pub struct WorkerRuntime<F> {
     num_threads: NonZero<usize>,
@@ -33,7 +32,7 @@ where
             let thread = {
                 let worker = (self.factory)(idx);
 
-                Builder::new().name(name.clone()).spawn(move || worker())?
+                Builder::new().name(name.clone()).spawn(worker)?
             };
 
             threads.push(thread);

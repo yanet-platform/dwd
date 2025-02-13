@@ -16,7 +16,7 @@ use bytes::Bytes;
 use http::Request;
 use http_body_util::{BodyExt, Empty};
 use hyper::client::conn::http1::{self, SendRequest};
-use tokio::{net::TcpSocket, runtime::Builder};
+use tokio::net::TcpSocket;
 
 use super::cfg::Config;
 use crate::{
