@@ -1,26 +1,26 @@
 use core::{
     future::Future,
     net::SocketAddr,
+    num::NonZero,
     sync::atomic::{AtomicBool, AtomicU64},
     time::Duration,
 };
-use std::{
-    sync::Arc,
-    thread::{self},
-    time::Instant,
-};
+use std::{sync::Arc, time::Instant};
 
 use anyhow::Error;
 use bytes::{Bytes, BytesMut};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpSocket, TcpStream},
-    runtime::Builder,
 };
 
 use super::cfg::Config;
 use crate::{
-    engine::{coro::ShapedCoroWorker, Task},
+    engine::{
+        coro::ShapedCoroWorker,
+        runtime::{TaskSet, WorkerRuntime},
+        Task,
+    },
     shaper::Shaper,
     stat::{HttpWorkerStat, PerCpuStat, RxWorkerStat, SockWorkerStat, Stat, TxWorkerStat},
     Produce, VecProduce,
@@ -72,106 +72,43 @@ impl EngineRaw {
     where
         F: Future<Output = ()> + 'static,
     {
-        let num_threads = self.cfg.native.threads.into();
-        let mut threads = Vec::with_capacity(num_threads);
+        let num_threads = self.cfg.native.threads;
 
         let bind = self.cfg.native.bind_endpoints.clone();
         let data = Arc::new(VecProduce::new(self.cfg.requests.clone()));
 
-        for (idx, thread_limits) in self.limits.clone().into_iter().enumerate() {
-            let thread = {
-                let mut worker = Worker::new(
-                    self.cfg.clone(),
+        let rt = WorkerRuntime::new(num_threads, |tid: usize| {
+            let bind = bind.clone();
+            let data = data.clone();
+            let requests_per_socket = self.cfg.native.requests_per_socket();
+            let stat = self.stat.stats[tid].clone();
+            let is_running = is_running.clone();
+            let limits = self.limits[tid].clone();
+            let num_tasks = NonZero::new(limits.len()).unwrap();
+
+            let set = TaskSet::new(num_tasks, move |idx: usize| {
+                let job = CoroWorker::new(
+                    self.cfg.addr,
                     bind.clone(),
                     data.clone(),
-                    thread_limits,
-                    is_running.clone(),
-                    self.stat.stats[idx].clone(),
+                    requests_per_socket,
+                    self.cfg.tcp_linger,
+                    self.cfg.tcp_no_delay,
+                    stat.clone(),
                 );
 
-                thread::Builder::new()
-                    .name("dwd:w".into())
-                    .spawn(move || worker.run())?
-            };
+                let shaper = Shaper::new(0, limits[idx].clone());
+                let job = ShapedCoroWorker::new(job, shaper, is_running.clone());
 
-            threads.push(thread);
-        }
-
-        for thread in threads {
-            thread.join().expect("no self join")?;
-        }
-
-        Ok(())
-    }
-}
-
-/// Per-thread worker.
-#[derive(Debug)]
-struct Worker<B, D> {
-    cfg: Config<Bytes>,
-    /// Bind endpoints.
-    bind: B,
-    /// Data to send.
-    data: D,
-    limits: Vec<Arc<AtomicU64>>,
-    is_running: Arc<AtomicBool>,
-    stat: Arc<WorkerStat>,
-}
-
-impl<B, D> Worker<B, D> {
-    pub fn new(
-        cfg: Config<Bytes>,
-        bind: B,
-        data: D,
-        limits: Vec<Arc<AtomicU64>>,
-        is_running: Arc<AtomicBool>,
-        stat: Arc<WorkerStat>,
-    ) -> Self {
-        Self {
-            cfg,
-            bind,
-            data,
-            limits,
-            is_running,
-            stat,
-        }
-    }
-}
-
-impl<B, D> Worker<B, D>
-where
-    B: Produce<Item = SocketAddr> + Clone + Send + Sync + 'static,
-    D: Produce<Item = Bytes> + Clone + Send + Sync + 'static,
-{
-    pub fn run(&mut self) -> Result<(), Error> {
-        let runtime = Builder::new_current_thread().enable_all().build()?;
-
-        let mut jobs = Vec::new();
-        for limit in &self.limits {
-            let job = CoroWorker::new(
-                self.cfg.addr,
-                self.bind.clone(),
-                self.data.clone(),
-                self.cfg.native.requests_per_socket(),
-                self.cfg.tcp_linger,
-                self.cfg.tcp_no_delay,
-                self.stat.clone(),
-            );
-            let mut job = ShapedCoroWorker::new(job, Shaper::new(0, limit.clone()), self.is_running.clone());
-
-            let job = runtime.spawn(async move {
-                job.run().await;
+                job.run()
             });
 
-            jobs.push(job);
-        }
+            || set.run()
+        });
 
-        runtime.block_on(async move {
-            for job in jobs {
-                job.await.unwrap();
-            }
-            Ok(())
-        })
+        rt.run()?;
+
+        Ok(())
     }
 }
 

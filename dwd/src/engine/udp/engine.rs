@@ -10,6 +10,7 @@ use anyhow::Error;
 
 use super::Config;
 use crate::{
+    engine::runtime::WorkerRuntime,
     shaper::Shaper,
     stat::{PerCpuStat, SockWorkerStat, Stat, TxWorkerStat},
     OneProduce, Produce,
@@ -56,35 +57,32 @@ impl Engine {
     where
         F: Future<Output = ()> + 'static,
     {
-        let num_threads = self.cfg.native.threads.into();
-        let mut threads = Vec::with_capacity(num_threads);
+        let num_threads = self.cfg.native.threads;
 
         let bind = self.cfg.native.bind_endpoints.clone();
         let data = Arc::new(OneProduce::new(b"GET / HTTP/1.1\r\n\r\n".to_vec()));
 
-        for (idx, thread_limits) in self.limits.clone().into_iter().enumerate() {
-            let thread = {
-                let mut worker = Worker::new(
-                    self.cfg.addr,
-                    bind.clone(),
-                    data.clone(),
-                    self.cfg.native.requests_per_socket(),
-                    thread_limits,
-                    is_running.clone(),
-                    self.stat.stats[idx].clone(),
-                );
+        let rt = WorkerRuntime::new(num_threads, move |tid: usize| {
+            let bind = bind.clone();
+            let data = data.clone();
+            let stat = self.stat.stats[tid].clone();
+            let is_running = is_running.clone();
+            let limits = self.limits[tid].clone();
 
-                thread::Builder::new()
-                    .name("dwd:w".into())
-                    .spawn(move || worker.run())?
-            };
+            let mut worker = Worker::new(
+                self.cfg.addr,
+                bind.clone(),
+                data.clone(),
+                self.cfg.native.requests_per_socket(),
+                limits,
+                is_running.clone(),
+                stat,
+            );
 
-            threads.push(thread);
-        }
+            move || worker.run()
+        });
 
-        for thread in threads {
-            thread.join().expect("no self join");
-        }
+        rt.run()?;
 
         Ok(())
     }
@@ -146,7 +144,7 @@ where
     B: Produce<Item = SocketAddr>,
     D: Produce<Item = Vec<u8>>,
 {
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> Result<(), Error> {
         while self.is_running.load(Ordering::Relaxed) {
             match self.shaper.tick() {
                 0 => Self::wait(),
@@ -159,6 +157,8 @@ where
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Performs a single UDP request.

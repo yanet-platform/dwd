@@ -31,7 +31,7 @@ impl<T> ShapedCoroWorker<T>
 where
     T: Task,
 {
-    pub async fn run(&mut self) {
+    pub async fn run(mut self) {
         while self.is_running.load(Ordering::Relaxed) {
             match self.shaper.tick() {
                 0 => Self::wait().await,
