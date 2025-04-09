@@ -287,3 +287,52 @@ generators:
 
 The resulting load profile in this case will look like:
 ![](./docs/profile.svg)
+
+## Build Instructions
+
+### Prerequisites
+
+- **Rust** - Install [Rust](https://www.rust-lang.org/tools/install) to build the project
+- **Linux** - Full functionality (including DPDK mode) is only available on Linux
+- **DPDK 19.11** - Required only if you want to build with DPDK support
+
+### Standard Build (Without DPDK)
+
+This build mode works on all platforms (Linux, macOS, Windows) and only requires Rust:
+
+```bash
+# Clone the repository
+git clone https://github.com/yanet-platform/dwd.git
+cd dwd
+
+# Build the project
+cargo build --release
+```
+
+The binary will be available at `target/release/dwd`.
+
+### DPDK-enabled Build (Linux Only)
+
+Building with DPDK support requires:
+
+1. Install DPDK 19.11 dependencies:
+
+```bash
+apt install -y libnuma1 libibverbs1 libnuma-dev
+```
+
+2. Build the project with DPDK feature enabled:
+
+```bash
+cargo build --release --features=dpdk
+```
+
+The DPDK-enabled binary will be available at `target/release/dwd`.
+
+### Troubleshooting
+
+If you encounter build issues with DPDK support:
+
+1. Ensure you have the required DPDK 19.11 dependencies installed
+2. Make sure hugepages are properly configured when running in DPDK mode
+3. Check that your network card is supported by DPDK 19.11
