@@ -40,8 +40,6 @@ pub type PciDeviceName = String;
 pub enum Error {
     #[error("i/o error")]
     Io(#[from] io::Error),
-    #[error("failed to discover neighbor")]
-    NeighbourLocate,
     #[error("failed to load pcap file")]
     PcapLoad(io::Error),
     #[error("failed to parse pcap file")]
@@ -319,10 +317,12 @@ impl DpdkWorkerGroup {
 
             // Neighbour MAC address.
             let neighbours = nl::get_neighbors(dev_info.if_index)?;
-            if neighbours.is_empty() {
-                return Err(Error::NeighbourLocate);
-            }
-            let neighbour_mac = neighbours[0];
+            let neighbour_mac = if neighbours.is_empty() {
+                log::warn!("PCI: {pci}, no neighbour MAC address found");
+                Default::default()
+            } else {
+                neighbours[0]
+            };
             log::debug!("PCI: {pci}, neighbour MAC: {neighbour_mac}");
 
             let mut port_cfg = dpdk::ffi::rte_eth_conf::default();
@@ -380,7 +380,6 @@ impl DpdkWorkerGroup {
                 worker.rx_queue_id = queue_id;
                 worker.tx_queue_id = queue_id + 1; // tx queue "0" for slow worker.
                 worker.src_mac = device_mac;
-                worker.dst_mac = neighbour_mac;
             }
 
             for queue_id in 0..tx_queues_count {
@@ -451,7 +450,6 @@ struct Worker {
     rx_queue_id: u16,
     tx_queue_id: u16,
     src_mac: MacAddr,
-    dst_mac: MacAddr,
     mempool: *mut dpdk::ffi::rte_mempool,
     mbufs_count: usize,
     mbufs: [*mut dpdk::ffi::rte_mbuf; MBUFS_COUNT as usize],
@@ -474,7 +472,6 @@ impl Worker {
             rx_queue_id: 0,
             tx_queue_id: 0,
             src_mac: Default::default(),
-            dst_mac: Default::default(),
             mempool,
             mbufs_count: 0,
             mbufs: [core::ptr::null_mut(); MBUFS_COUNT as usize],
