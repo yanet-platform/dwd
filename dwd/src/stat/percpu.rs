@@ -94,6 +94,14 @@ impl<T, R, H> SocketStat for Stat<T, R, SockWorkerStat, H> {
             .map(|v| unsafe { *v.sock.num_sock_errors.get() })
             .sum()
     }
+
+    #[inline]
+    fn num_retransmits(&self) -> u64 {
+        self.stats
+            .iter()
+            .map(|v| unsafe { *v.sock.num_retransmits.get() })
+            .sum()
+    }
 }
 
 impl<T, R, S> HttpStat for Stat<T, R, S, HttpWorkerStat> {
@@ -175,6 +183,12 @@ impl<T, R, H> PerCpuStat<T, R, SockWorkerStat, H> {
     pub fn on_sock_err(&self) {
         unsafe { *self.sock.num_sock_errors.get() += 1 };
     }
+
+    /// Increases the number of retransmits.
+    #[inline]
+    pub fn on_retransmits(&self, v: u32) {
+        unsafe { *self.sock.num_retransmits.get() += v as u64 };
+    }
 }
 
 impl<T, R, S> PerCpuStat<T, R, S, HttpWorkerStat> {
@@ -245,6 +259,8 @@ pub struct SockWorkerStat {
     num_sock_created: UnsafeCell<u64>,
     /// Number of socket errors.
     num_sock_errors: UnsafeCell<u64>,
+    /// Number of TCP retransmits.
+    num_retransmits: UnsafeCell<u64>,
 }
 
 unsafe impl Sync for SockWorkerStat {}

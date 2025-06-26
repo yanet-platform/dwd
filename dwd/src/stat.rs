@@ -28,6 +28,7 @@ pub trait RxStat {
 pub trait SocketStat {
     fn num_sock_created(&self) -> u64;
     fn num_sock_errors(&self) -> u64;
+    fn num_retransmits(&self) -> u64;
 }
 
 pub trait HttpStat {
