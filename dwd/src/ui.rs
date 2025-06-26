@@ -459,6 +459,11 @@ impl SockStatWidget {
             MetricWidget::new("Rate   ", Box::new(Meter::new(|s| s.num_sock_created(), stat.clone()))),
             MetricWidget::new("Errors ", Box::new(Gauge::new(|s| s.num_sock_errors(), stat.clone())))
                 .with_metric_style(Style::default().fg(Color::Red)),
+            MetricWidget::new(
+                "Retransmits",
+                Box::new(Gauge::new(|s| s.num_retransmits(), stat.clone())),
+            )
+            .with_metric_style(Style::default().fg(Color::Yellow)),
         ];
 
         let widget = MetricListWidget::new("Sockets", widgets);
@@ -469,7 +474,7 @@ impl SockStatWidget {
 
 impl Widget for SockStatWidget {
     fn constraint(&self) -> Constraint {
-        Constraint::Length(5)
+        Constraint::Length(6)
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) {
