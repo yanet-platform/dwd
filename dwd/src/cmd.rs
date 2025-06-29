@@ -58,7 +58,7 @@ pub struct HttpRawCmd {
 #[derive(Debug, Clone, Parser)]
 pub struct HttpCmd {
     /// Target endpoint.
-    #[clap(required = true)]
+    #[clap(required = true, value_name = "IPv4:PORT or [IPv6]:PORT")]
     pub addr: SocketAddr,
     /// Native workload settings.
     #[clap(flatten)]
@@ -121,7 +121,7 @@ where
 #[derive(Debug, Clone, Parser)]
 pub struct UdpCmd {
     /// Target endpoint.
-    #[clap(required = true)]
+    #[clap(required = true, value_name = "IPv4:PORT or [IPv6]:PORT")]
     pub addr: SocketAddr,
     /// Native workload settings.
     #[clap(flatten)]
