@@ -8,6 +8,7 @@ mod generator;
 mod histogram;
 pub mod logging;
 mod shaper;
+mod sockstat;
 mod stat;
 mod ui;
 mod worker;
