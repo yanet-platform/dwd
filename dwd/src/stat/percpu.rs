@@ -67,8 +67,12 @@ impl<T, S, H> RxStat for Stat<T, RxWorkerStat, S, H> {
 
     #[inline]
     fn hist(&self) -> LogHistogram {
-        let mut snapshot = vec![0u64; self.stats.len()];
+        let mut snapshot = Vec::new();
         for s in &self.stats {
+            if s.rx.hist.buckets().len() > snapshot.len() {
+                snapshot.resize(s.rx.hist.buckets().len(), 0);
+            }
+
             for (idx, b) in s.rx.hist.buckets().iter().enumerate() {
                 snapshot[idx] += unsafe { *b.get() };
             }
