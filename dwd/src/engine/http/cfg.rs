@@ -1,4 +1,4 @@
-use core::{net::SocketAddr, num::NonZero};
+use core::{net::SocketAddr, num::NonZero, time::Duration};
 
 use crate::cfg::NativeLoadConfig;
 
@@ -15,6 +15,8 @@ pub struct Config<T> {
     pub concurrency: NonZero<usize>,
     /// Native workload settings.
     pub native: NativeLoadConfig,
+    /// Request timeout.
+    pub timeout: Duration,
     /// Set linger TCP option with specified value.
     pub tcp_linger: Option<u64>,
     /// Enable SOCK_NODELAY socket option.

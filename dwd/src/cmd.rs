@@ -1,4 +1,4 @@
-use core::{error::Error, net::SocketAddr, num::NonZero};
+use core::{error::Error, net::SocketAddr, num::NonZero, time::Duration};
 use std::path::PathBuf;
 
 use clap::{ArgAction, Parser};
@@ -79,6 +79,9 @@ pub struct HttpCmd {
     /// Enable SOCK_NODELAY socket option.
     #[clap(long)]
     pub tcp_no_delay: bool,
+    /// Request timeout in seconds with fractional part.
+    #[clap(long, default_value_t = 4.0)]
+    pub timeout: f64,
 }
 
 impl<T> TryFrom<HttpCmd> for HttpConfig<T>
@@ -93,6 +96,7 @@ where
             native,
             concurrency,
             payload_json,
+            timeout,
             tcp_linger,
             tcp_no_delay,
         } = cmd;
@@ -109,6 +113,7 @@ where
             addr,
             native: native.try_into()?,
             concurrency,
+            timeout: Duration::try_from_secs_f64(timeout)?,
             tcp_linger,
             tcp_no_delay,
             requests,
