@@ -17,7 +17,7 @@ use tokio::sync::mpsc::{self, Receiver};
 #[cfg(feature = "dpdk")]
 use crate::{
     cfg::DpdkConfig,
-    worker::dpdk::{DpdkWorkerGroup, Stat as DpdkStat},
+    worker::dpdk::{DpdkEngine, Stat as DpdkStat},
 };
 use crate::{
     cfg::{Config, ModeConfig},
@@ -157,40 +157,28 @@ impl Runtime {
         Ok(())
     }
 
-    // TODO: refactor
     #[cfg(feature = "dpdk")]
     async fn run_dpdk(self, cfg: DpdkConfig) -> Result<(), Box<dyn Error>> {
         let cfg = cfg.into_inner();
-        let dpdk = DpdkWorkerGroup::new(cfg, self.is_running.clone())?;
-        let stat = Arc::new(DpdkStat::new(dpdk.stats()));
-        let limits = dpdk.pps_limits();
+        let engine = DpdkEngine::new(cfg)?;
+        let stat = Arc::new(DpdkStat::new(engine.stats()));
+        let limits = engine.pps_limits();
 
-        let thread: JoinHandle<()> = Builder::new().spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            runtime
-                .block_on(async move {
-                    let (tx, rx) = mpsc::channel(1);
+        let engine = {
+            let is_running = self.is_running.clone();
+            Builder::new().spawn(move || engine.run(is_running))?
+        };
 
-                    let ui = Ui::new(tx).with_tx(stat.clone()).with_burst_tx(stat.clone());
-                    let ui = self.run_ui(ui)?;
+        let (tx, rx) = mpsc::channel(1);
 
-                    let (shaper,) = tokio::join!(self.run_generator(limits, stat, rx));
-                    shaper?;
+        let ui = Ui::new(tx).with_tx(stat.clone()).with_burst_tx(stat.clone());
+        let ui = self.run_ui(ui)?;
 
-                    ui.join().expect("no self join").unwrap();
+        let (shaper,) = tokio::join!(self.run_generator(limits, stat, rx));
+        shaper?;
 
-                    Ok::<(), Box<dyn Error>>(())
-                })
-                .unwrap();
-
-            // Ok(())
-        })?;
-
-        dpdk.run()?;
-        thread.join().expect("no self join");
+        ui.join().expect("no self join").unwrap();
+        engine.join().expect("no self join")?;
 
         Ok(())
     }
