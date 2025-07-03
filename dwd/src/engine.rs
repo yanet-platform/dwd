@@ -166,16 +166,12 @@ impl Runtime {
         let stat = engine.stats();
         let limits = engine.pps_limits();
 
-        let (cv, rx) = std::sync::mpsc::sync_channel(1);
-
         let engine = {
             let is_running = self.is_running.clone();
             Builder::new()
                 .name("engine".into())
-                .spawn(move || engine.run(is_running, cv))?
+                .spawn(move || engine.run(is_running))?
         };
-
-        let _ = rx.recv()?;
 
         let (tx, rx) = mpsc::channel(1);
 
