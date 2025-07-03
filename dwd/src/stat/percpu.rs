@@ -5,27 +5,31 @@ use core::{
 use std::{sync::Arc, time::Instant};
 
 use super::{CommonStat, HttpStat, RxStat, SocketStat, TxStat};
-use crate::histogram::{LogHistogram, PerCpuLogHistogram};
+use crate::{
+    histogram::{LogHistogram, PerCpuLogHistogram},
+    stat::BurstTxStat,
+};
 
 #[derive(Debug)]
-pub struct Stat<T, R, S, H> {
+pub struct Stat<T, R, S, H, B> {
     generator: AtomicU64,
-    pub stats: Vec<Arc<PerCpuStat<T, R, S, H>>>,
+    pub stats: Vec<Arc<PerCpuStat<T, R, S, H, B>>>,
 }
 
-impl<T, R, S, H> Stat<T, R, S, H>
+impl<T, R, S, H, B> Stat<T, R, S, H, B>
 where
     T: Default,
     R: Default,
     S: Default,
     H: Default,
+    B: Default,
 {
-    pub fn new(stats: Vec<Arc<PerCpuStat<T, R, S, H>>>) -> Self {
+    pub fn new(stats: Vec<Arc<PerCpuStat<T, R, S, H, B>>>) -> Self {
         Self { generator: AtomicU64::new(0), stats }
     }
 }
 
-impl<T, R, S, H> CommonStat for Stat<T, R, S, H> {
+impl<T, R, S, H, B> CommonStat for Stat<T, R, S, H, B> {
     #[inline]
     fn generator(&self) -> u64 {
         self.generator.load(Ordering::Relaxed)
@@ -37,7 +41,7 @@ impl<T, R, S, H> CommonStat for Stat<T, R, S, H> {
     }
 }
 
-impl<R, S, H> TxStat for Stat<TxWorkerStat, R, S, H> {
+impl<R, S, H, B> TxStat for Stat<TxWorkerStat, R, S, H, B> {
     #[inline]
     fn num_requests(&self) -> u64 {
         self.stats.iter().map(|v| unsafe { *v.tx.num_requests.get() }).sum()
@@ -49,7 +53,7 @@ impl<R, S, H> TxStat for Stat<TxWorkerStat, R, S, H> {
     }
 }
 
-impl<T, S, H> RxStat for Stat<T, RxWorkerStat, S, H> {
+impl<T, S, H, B> RxStat for Stat<T, RxWorkerStat, S, H, B> {
     #[inline]
     fn num_responses(&self) -> u64 {
         self.stats.iter().map(|v| unsafe { *v.rx.num_responses.get() }).sum()
@@ -82,7 +86,7 @@ impl<T, S, H> RxStat for Stat<T, RxWorkerStat, S, H> {
     }
 }
 
-impl<T, R, H> SocketStat for Stat<T, R, SockWorkerStat, H> {
+impl<T, R, H, B> SocketStat for Stat<T, R, SockWorkerStat, H, B> {
     #[inline]
     fn num_sock_created(&self) -> u64 {
         self.stats
@@ -108,7 +112,7 @@ impl<T, R, H> SocketStat for Stat<T, R, SockWorkerStat, H> {
     }
 }
 
-impl<T, R, S> HttpStat for Stat<T, R, S, HttpWorkerStat> {
+impl<T, R, S, B> HttpStat for Stat<T, R, S, HttpWorkerStat, B> {
     #[inline]
     fn num_2xx(&self) -> u64 {
         self.stats.iter().map(|v| unsafe { *v.http.num_2xx.get() }).sum()
@@ -130,15 +134,23 @@ impl<T, R, S> HttpStat for Stat<T, R, S, HttpWorkerStat> {
     }
 }
 
+impl<T, R, S, H> BurstTxStat for Stat<T, R, S, H, BurstTxWorkerStat> {
+    #[inline]
+    fn num_bursts_tx(&self, idx: usize) -> u64 {
+        self.stats.iter().map(|v| unsafe { *v.bursts_tx.hist[idx].get() }).sum()
+    }
+}
+
 #[derive(Debug, Default)]
-pub struct PerCpuStat<T = (), R = (), S = (), H = ()> {
+pub struct PerCpuStat<T = (), R = (), S = (), H = (), B = ()> {
     tx: T,
     rx: R,
     sock: S,
     http: H,
+    bursts_tx: B,
 }
 
-impl<R, S, H> PerCpuStat<TxWorkerStat, R, S, H> {
+impl<R, S, H, B> PerCpuStat<TxWorkerStat, R, S, H, B> {
     /// Increases the number of requests made by the given value.
     ///
     /// Should be called after each successful request transmitted.
@@ -153,7 +165,7 @@ impl<R, S, H> PerCpuStat<TxWorkerStat, R, S, H> {
     }
 }
 
-impl<T, S, H> PerCpuStat<T, RxWorkerStat, S, H> {
+impl<T, S, H, B> PerCpuStat<T, RxWorkerStat, S, H, B> {
     /// Increases the number of responses.
     ///
     /// Should be called after each successful response received.
@@ -175,7 +187,7 @@ impl<T, S, H> PerCpuStat<T, RxWorkerStat, S, H> {
     }
 }
 
-impl<T, R, H> PerCpuStat<T, R, SockWorkerStat, H> {
+impl<T, R, H, B> PerCpuStat<T, R, SockWorkerStat, H, B> {
     /// Increases the number of sockets created.
     #[inline]
     pub fn on_sock_created(&self) {
@@ -195,7 +207,7 @@ impl<T, R, H> PerCpuStat<T, R, SockWorkerStat, H> {
     }
 }
 
-impl<T, R, S> PerCpuStat<T, R, S, HttpWorkerStat> {
+impl<T, R, S, H> PerCpuStat<T, R, S, HttpWorkerStat, H> {
     /// Increases the number of 2xx responses by the given value.
     #[inline]
     pub fn on_2xx(&self) {
@@ -221,7 +233,15 @@ impl<T, R, S> PerCpuStat<T, R, S, HttpWorkerStat> {
     }
 }
 
-unsafe impl<T, R, S, H> Sync for PerCpuStat<T, R, S, H>
+impl<T, R, S, H> PerCpuStat<T, R, S, H, BurstTxWorkerStat> {
+    /// Increases the number of bursts transmitted.
+    #[inline]
+    pub fn on_bursts_tx(&self, v: u64) {
+        unsafe { *self.bursts_tx.hist[v as usize - 1].get() += 1 };
+    }
+}
+
+unsafe impl<T, R, S, H, B> Sync for PerCpuStat<T, R, S, H, B>
 where
     T: Sync,
     R: Sync,
@@ -283,3 +303,8 @@ pub struct HttpWorkerStat {
 }
 
 unsafe impl Sync for HttpWorkerStat {}
+
+#[derive(Debug, Default)]
+pub struct BurstTxWorkerStat {
+    hist: [UnsafeCell<u64>; 32],
+}

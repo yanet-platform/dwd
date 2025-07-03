@@ -16,8 +16,8 @@ use crate::{
     OneProduce, Produce,
 };
 
-type WorkerStat = PerCpuStat<TxWorkerStat, (), SockWorkerStat, ()>;
-type EngineStat = Stat<TxWorkerStat, (), SockWorkerStat, ()>;
+type WorkerStat = PerCpuStat<TxWorkerStat, (), SockWorkerStat, (), ()>;
+type EngineStat = Stat<TxWorkerStat, (), SockWorkerStat, (), ()>;
 
 #[derive(Debug)]
 pub struct Engine {
