@@ -4,7 +4,7 @@ use std::{
     ffi::CString,
     fs, io,
     path::{Path, PathBuf},
-    sync::{mpsc::SyncSender, Arc},
+    sync::Arc,
 };
 
 pub use dpdk::cpu::CoreId;
@@ -121,21 +121,26 @@ pub struct PortConfig {
     cores: Vec<CoreId>,
 }
 
+struct WorkerData<'a> {
+    engine: &'a mut DpdkEngine,
+    is_running: Arc<AtomicBool>,
+}
+
 #[no_mangle]
 extern "C" fn run_worker(data: *mut core::ffi::c_void) -> i32 {
     // This function can be run simultaneously in multiple threads. We must
     // take care of concurrent access.
-    let wg = unsafe { &mut *(data as *mut DpdkEngine) };
+    let data = unsafe { &mut *(data as *mut WorkerData<'_>) };
 
     let core_id = dpdk::rte_lcore_id();
 
     // Main thread.
-    if core_id == wg.cfg.master_lcore() {
+    if core_id == data.engine.cfg.master_lcore() {
         return 0;
     }
 
-    let worker = wg.workers.get_mut(&core_id).expect("must be initialized");
-    worker.run();
+    let worker = data.engine.workers.get_mut(&core_id).expect("must be initialized");
+    worker.run(data.is_running.clone());
 
     0
 }
@@ -148,6 +153,7 @@ extern "C" fn run_worker(data: *mut core::ffi::c_void) -> i32 {
 pub struct DpdkEngine {
     /// Configuration.
     cfg: Config,
+    eal: Eal,
     /// Loaded pcap (not pcapng).
     pcap: Vec<u8>,
     /// PPS limits for each worker.
@@ -172,13 +178,28 @@ impl DpdkEngine {
         let stats = Arc::new(EngineStat::new(stats));
         let workers = HashMap::new();
 
-        let m = Self {
+        // Init DPDK EAL (Environment Abstraction Layer).
+        let eal = Self::init_eal(&cfg)?;
+
+        let mut m = Self {
             cfg,
+            eal,
             pcap,
             pps_limits,
             stats,
             workers,
         };
+
+        m.init_workers()?;
+        m.init_ports()?;
+        m.load_pcap()?;
+
+        if dpdk::ethdev::eth_dev_count() as usize != m.cfg.ports.len() {
+            return Err(Error::InvalidPortsCount(m.cfg.ports.len(), dpdk::ethdev::eth_dev_count() as usize).into());
+        }
+        if dpdk::lcore::lcore_count() as usize != m.cfg.cores_count() + 1 {
+            return Err(Error::InvalidCoresCount.into());
+        }
 
         Ok(m)
     }
@@ -192,20 +213,7 @@ impl DpdkEngine {
         self.stats.clone()
     }
 
-    pub fn run(mut self, is_running: Arc<AtomicBool>, cv: SyncSender<()>) -> Result<(), anyhow::Error> {
-        // Init DPDK EAL (Environment Abstraction Layer).
-        let eal = Self::init_eal(&self.cfg)?;
-
-        self.init_workers(is_running)?;
-        self.init_ports()?;
-        self.load_pcap()?;
-
-        if dpdk::ethdev::eth_dev_count() as usize != self.cfg.ports.len() {
-            return Err(Error::InvalidPortsCount(self.cfg.ports.len(), dpdk::ethdev::eth_dev_count() as usize).into());
-        }
-        if dpdk::lcore::lcore_count() as usize != self.cfg.cores_count() + 1 {
-            return Err(Error::InvalidCoresCount.into());
-        }
+    pub fn run(mut self, is_running: Arc<AtomicBool>) -> Result<(), anyhow::Error> {
         for port_id in dpdk::ethdev::eth_dev_iter() {
             unsafe {
                 dpdk::ffi::rte_eth_stats_reset(port_id);
@@ -214,13 +222,16 @@ impl DpdkEngine {
             }
         }
 
-        cv.send(())?;
-
         // 6. Spawn threads.
+        let mut data = WorkerData {
+            engine: &mut self,
+            is_running: is_running.clone(),
+        };
+
         unsafe {
             dpdk::ffi::rte_eal_mp_remote_launch(
                 Some(run_worker),
-                &mut self as *mut DpdkEngine as *mut core::ffi::c_void,
+                &mut data as *mut WorkerData<'_> as *mut core::ffi::c_void,
                 // dpdk::ffi::rte_rmt_call_main_t::SKIP_MAIN,
                 dpdk::ffi::rte_rmt_call_master_t::SKIP_MASTER,
             )
@@ -229,7 +240,7 @@ impl DpdkEngine {
         // 7. Join.
         unsafe { dpdk::ffi::rte_eal_mp_wait_lcore() };
 
-        core::mem::drop(eal);
+        core::mem::drop(self.eal);
 
         Ok(())
     }
@@ -252,7 +263,7 @@ impl DpdkEngine {
         Ok(eal)
     }
 
-    fn init_workers(&mut self, is_running: Arc<AtomicBool>) -> Result<(), Error> {
+    fn init_workers(&mut self) -> Result<(), Error> {
         for (idx, core) in self.cfg.cores().enumerate() {
             let socket_id = dpdk::rte_lcore_to_socket_id(core);
 
@@ -275,10 +286,7 @@ impl DpdkEngine {
 
             let pps_limit = self.pps_limits.get(&core).expect("must exist").clone();
             let shaper = Shaper::new(0, pps_limit);
-            let worker = RteBox::new(
-                Worker::new(mempool, shaper, self.stats.stats[idx].clone(), is_running.clone()),
-                socket_id,
-            )?;
+            let worker = RteBox::new(Worker::new(mempool, shaper, self.stats.stats[idx].clone()), socket_id)?;
 
             self.workers.insert(core, worker);
         }
@@ -450,17 +458,11 @@ struct Worker {
     recv_mbufs: Vec<*mut dpdk::ffi::rte_mbuf>,
     shaper: Shaper,
     stat: Arc<WorkerStat>,
-    is_running: Arc<AtomicBool>,
     packets_count_tx: usize,
 }
 
 impl Worker {
-    pub fn new(
-        mempool: *mut dpdk::ffi::rte_mempool,
-        shaper: Shaper,
-        stat: Arc<WorkerStat>,
-        is_running: Arc<AtomicBool>,
-    ) -> Self {
+    pub fn new(mempool: *mut dpdk::ffi::rte_mempool, shaper: Shaper, stat: Arc<WorkerStat>) -> Self {
         Self {
             port_id: 0,
             rx_queue_id: 0,
@@ -472,13 +474,12 @@ impl Worker {
             recv_mbufs: vec![core::ptr::null_mut(); MBUFS_BURST_SIZE as usize],
             shaper,
             stat,
-            is_running,
             packets_count_tx: 0,
         }
     }
 
-    pub fn run(&mut self) {
-        while self.is_running.load(Ordering::Relaxed) {
+    pub fn run(&mut self, is_running: Arc<AtomicBool>) {
+        while is_running.load(Ordering::Relaxed) {
             // todo: stat.
             let _rx_size = unsafe {
                 dpdk::rte_eth_rx_burst(

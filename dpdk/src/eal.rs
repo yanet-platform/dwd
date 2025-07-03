@@ -102,6 +102,8 @@ impl Drop for EalLoggingContext {
     }
 }
 
+unsafe impl Send for EalLoggingContext {}
+
 #[derive(Debug)]
 pub struct Eal {
     _ctx: Option<EalLoggingContext>,
