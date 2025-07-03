@@ -65,16 +65,24 @@ pub struct Ui {
 impl Ui {
     pub fn new(tx: Sender<GeneratorEvent>) -> Self {
         let head = StatusWidget::new();
-        let stats = Vec::new();
+        let stats: Vec<Box<dyn Widget + Send>> = Vec::new();
         let input = InputWidget::new();
         let keymap = KeymapWidget::new();
 
         Self { tx, head, stats, keymap, input }
     }
 
+    pub fn with_common<S>(mut self, stat: Arc<S>) -> Self
+    where
+        S: CommonStat + Send + Sync + 'static,
+    {
+        self.stats.push(Box::new(CommonStatWidget::new(stat)));
+        self
+    }
+
     pub fn with_tx<S>(mut self, stat: Arc<S>) -> Self
     where
-        S: CommonStat + TxStat + Send + Sync + 'static,
+        S: TxStat + Send + Sync + 'static,
     {
         self.stats.push(Box::new(TxStatWidget::new(stat)));
         self
@@ -316,6 +324,40 @@ impl MetricListWidget {
     }
 }
 
+struct CommonStatWidget {
+    widget: MetricListWidget,
+}
+
+impl CommonStatWidget {
+    pub fn new<S>(stat: Arc<S>) -> Self
+    where
+        S: ?Sized + CommonStat + Send + Sync + 'static,
+    {
+        let widgets = vec![MetricWidget::new(
+            "RPS expected ",
+            Box::new(Gauge::new(|s| s.generator(), stat.clone())),
+        )];
+
+        let widget = MetricListWidget::new("Generator", widgets);
+
+        Self { widget }
+    }
+}
+
+impl Widget for CommonStatWidget {
+    fn constraint(&self) -> Constraint {
+        Constraint::Length(3)
+    }
+
+    fn update(&mut self) {
+        self.widget.update();
+    }
+
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.widget.draw(frame, area);
+    }
+}
+
 struct TxStatWidget {
     widget: MetricListWidget,
 }
@@ -323,10 +365,9 @@ struct TxStatWidget {
 impl TxStatWidget {
     pub fn new<S>(stat: Arc<S>) -> Self
     where
-        S: CommonStat + TxStat + Send + Sync + 'static,
+        S: ?Sized + TxStat + Send + Sync + 'static,
     {
         let widgets = vec![
-            MetricWidget::new("RPS expected ", Box::new(Gauge::new(|s| s.generator(), stat.clone()))),
             MetricWidget::new(
                 "RPS current  ",
                 Box::new(Meter::new(|s| s.num_requests(), stat.clone())),
@@ -349,7 +390,7 @@ impl TxStatWidget {
 
 impl Widget for TxStatWidget {
     fn constraint(&self) -> Constraint {
-        Constraint::Length(6)
+        Constraint::Length(5)
     }
 
     fn update(&mut self) {
@@ -368,7 +409,7 @@ struct RxStatWidget {
 impl RxStatWidget {
     pub fn new<S>(stat: Arc<S>) -> Self
     where
-        S: RxStat + Send + Sync + 'static,
+        S: ?Sized + RxStat + Send + Sync + 'static,
     {
         let widgets = vec![
             MetricWidget::new(
@@ -452,7 +493,7 @@ struct SockStatWidget {
 impl SockStatWidget {
     pub fn new<S>(stat: Arc<S>) -> Self
     where
-        S: SocketStat + Send + Sync + 'static,
+        S: ?Sized + SocketStat + Send + Sync + 'static,
     {
         let widgets = vec![
             MetricWidget::new("Created", Box::new(Gauge::new(|s| s.num_sock_created(), stat.clone()))),
@@ -493,7 +534,7 @@ struct HttpStatWidget {
 impl HttpStatWidget {
     pub fn new<S>(stat: Arc<S>) -> Self
     where
-        S: HttpStat + Send + Sync + 'static,
+        S: ?Sized + HttpStat + Send + Sync + 'static,
     {
         let widgets = vec![
             MetricWidget::new("2xx", Box::new(Gauge::new(|s| s.num_2xx(), stat.clone())))
@@ -534,7 +575,7 @@ struct BurstTxStatWidget {
 impl BurstTxStatWidget {
     pub fn new<S>(stat: Arc<S>) -> Self
     where
-        S: BurstTxStat + Send + Sync + 'static,
+        S: ?Sized + BurstTxStat + Send + Sync + 'static,
     {
         let mut bursts = Vec::with_capacity(16);
         for idx in 0..16 {

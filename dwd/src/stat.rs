@@ -1,4 +1,6 @@
-pub use self::percpu::{HttpWorkerStat, PerCpuStat, RxWorkerStat, SockWorkerStat, Stat, TxWorkerStat};
+pub use self::percpu::{
+    BurstTxWorkerStat, HttpWorkerStat, PerCpuStat, RxWorkerStat, SockWorkerStat, Stat, TxWorkerStat,
+};
 use crate::histogram::LogHistogram;
 
 mod percpu;

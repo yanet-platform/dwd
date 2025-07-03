@@ -15,10 +15,7 @@ use hyper::Request;
 use tokio::sync::mpsc::{self, Receiver};
 
 #[cfg(feature = "dpdk")]
-use crate::{
-    cfg::DpdkConfig,
-    worker::dpdk::{DpdkEngine, Stat as DpdkStat},
-};
+use crate::{cfg::DpdkConfig, worker::dpdk::DpdkEngine};
 use crate::{
     cfg::{Config, ModeConfig},
     engine::{
@@ -88,6 +85,7 @@ impl Runtime {
         let (tx, rx) = mpsc::channel(1);
 
         let ui = Ui::new(tx)
+            .with_common(stat.clone())
             .with_tx(stat.clone())
             .with_rx(stat.clone())
             .with_http(stat.clone())
@@ -117,6 +115,7 @@ impl Runtime {
         let (tx, rx) = mpsc::channel(1);
 
         let ui = Ui::new(tx)
+            .with_common(stat.clone())
             .with_tx(stat.clone())
             .with_rx(stat.clone())
             .with_http(stat.clone())
@@ -145,7 +144,10 @@ impl Runtime {
 
         let (tx, rx) = mpsc::channel(1);
 
-        let ui = Ui::new(tx).with_tx(stat.clone()).with_sock(stat.clone());
+        let ui = Ui::new(tx)
+            .with_common(stat.clone())
+            .with_tx(stat.clone())
+            .with_sock(stat.clone());
         let ui = self.run_ui(ui)?;
 
         let (shaper,) = tokio::join!(self.run_generator(limits, stat.clone(), rx));
@@ -161,17 +163,26 @@ impl Runtime {
     async fn run_dpdk(self, cfg: DpdkConfig) -> Result<(), Box<dyn Error>> {
         let cfg = cfg.into_inner();
         let engine = DpdkEngine::new(cfg)?;
-        let stat = Arc::new(DpdkStat::new(engine.stats()));
+        let stat = engine.stats();
         let limits = engine.pps_limits();
+
+        let (cv, rx) = std::sync::mpsc::sync_channel(1);
 
         let engine = {
             let is_running = self.is_running.clone();
-            Builder::new().spawn(move || engine.run(is_running))?
+            Builder::new()
+                .name("engine".into())
+                .spawn(move || engine.run(is_running, cv))?
         };
+
+        let _ = rx.recv()?;
 
         let (tx, rx) = mpsc::channel(1);
 
-        let ui = Ui::new(tx).with_tx(stat.clone()).with_burst_tx(stat.clone());
+        let ui = Ui::new(tx)
+            .with_common(stat.clone())
+            .with_tx(stat.clone())
+            .with_burst_tx(stat.clone());
         let ui = self.run_ui(ui)?;
 
         let (shaper,) = tokio::join!(self.run_generator(limits, stat, rx));

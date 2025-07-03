@@ -1,13 +1,10 @@
-use core::{
-    cell::UnsafeCell,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
-};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{
     collections::{HashMap, HashSet},
     ffi::CString,
     fs, io,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{mpsc::SyncSender, Arc},
 };
 
 pub use dpdk::cpu::CoreId;
@@ -24,8 +21,11 @@ use thiserror::Error;
 
 use crate::{
     shaper::Shaper,
-    stat::{BurstTxStat, CommonStat, TxStat},
+    stat::{BurstTxWorkerStat, PerCpuStat, Stat, TxWorkerStat},
 };
+
+pub type WorkerStat = PerCpuStat<TxWorkerStat, (), (), (), BurstTxWorkerStat>;
+pub type EngineStat = Stat<TxWorkerStat, (), (), (), BurstTxWorkerStat>;
 
 const MBUFS_COUNT: u32 = 256 * 1024;
 const MBUF_SIZE: u32 = 10 * 1024;
@@ -46,8 +46,8 @@ pub enum Error {
     PcapParse,
     #[error("invalid PCI device")]
     InvalidPciDevice,
-    #[error("invalid ports count")]
-    InvalidPortsCount,
+    #[error("invalid ports count: configured {0}, found {1}")]
+    InvalidPortsCount(usize, usize),
     #[error("invalid cores count")]
     InvalidCoresCount,
     #[error("out of memory")]
@@ -153,7 +153,7 @@ pub struct DpdkEngine {
     /// PPS limits for each worker.
     pps_limits: HashMap<CoreId, Arc<AtomicU64>>,
     /// Runtime statistics.
-    stats: HashMap<CoreId, Arc<LocalStat>>,
+    stats: Arc<EngineStat>,
     ///
     workers: HashMap<CoreId, RteBox<Worker>>,
 }
@@ -163,20 +163,14 @@ impl DpdkEngine {
         let pcap = fs::read(cfg.pcap_path()).map_err(Error::PcapLoad)?;
 
         let mut pps_limits = HashMap::new();
+        let mut stats = Vec::new();
         for core in cfg.cores() {
             pps_limits.insert(core, Arc::new(AtomicU64::new(0)));
+            stats.push(Arc::new(WorkerStat::default()));
         }
 
-        let stats = Default::default();
+        let stats = Arc::new(EngineStat::new(stats));
         let workers = HashMap::new();
-
-        // 3. Validate.
-        if dpdk::ethdev::eth_dev_count() as usize != cfg.ports.len() {
-            return Err(Error::InvalidPortsCount);
-        }
-        if dpdk::lcore::lcore_count() as usize != cfg.cores_count() + 1 {
-            return Err(Error::InvalidCoresCount);
-        }
 
         let m = Self {
             cfg,
@@ -194,18 +188,24 @@ impl DpdkEngine {
         self.pps_limits.values().cloned().collect()
     }
 
-    pub fn stats(&self) -> Vec<Arc<LocalStat>> {
-        self.stats.values().cloned().collect()
+    pub fn stats(&self) -> Arc<EngineStat> {
+        self.stats.clone()
     }
 
-    pub fn run(mut self, is_running: Arc<AtomicBool>) -> Result<(), anyhow::Error> {
+    pub fn run(mut self, is_running: Arc<AtomicBool>, cv: SyncSender<()>) -> Result<(), anyhow::Error> {
         // Init DPDK EAL (Environment Abstraction Layer).
-        let _eal = Self::init_eal(&self.cfg)?;
+        let eal = Self::init_eal(&self.cfg)?;
 
         self.init_workers(is_running)?;
         self.init_ports()?;
         self.load_pcap()?;
 
+        if dpdk::ethdev::eth_dev_count() as usize != self.cfg.ports.len() {
+            return Err(Error::InvalidPortsCount(self.cfg.ports.len(), dpdk::ethdev::eth_dev_count() as usize).into());
+        }
+        if dpdk::lcore::lcore_count() as usize != self.cfg.cores_count() + 1 {
+            return Err(Error::InvalidCoresCount.into());
+        }
         for port_id in dpdk::ethdev::eth_dev_iter() {
             unsafe {
                 dpdk::ffi::rte_eth_stats_reset(port_id);
@@ -213,6 +213,8 @@ impl DpdkEngine {
                 dpdk::ffi::rte_eth_promiscuous_enable(port_id);
             }
         }
+
+        cv.send(())?;
 
         // 6. Spawn threads.
         unsafe {
@@ -226,6 +228,8 @@ impl DpdkEngine {
 
         // 7. Join.
         unsafe { dpdk::ffi::rte_eal_mp_wait_lcore() };
+
+        core::mem::drop(eal);
 
         Ok(())
     }
@@ -249,7 +253,7 @@ impl DpdkEngine {
     }
 
     fn init_workers(&mut self, is_running: Arc<AtomicBool>) -> Result<(), Error> {
-        for core in self.cfg.cores() {
+        for (idx, core) in self.cfg.cores().enumerate() {
             let socket_id = dpdk::rte_lcore_to_socket_id(core);
 
             let mempool_name = CString::new(format!("mp::{}", core)).unwrap();
@@ -270,14 +274,12 @@ impl DpdkEngine {
             }
 
             let pps_limit = self.pps_limits.get(&core).expect("must exist").clone();
-            let stat = Arc::new(LocalStat::default());
             let shaper = Shaper::new(0, pps_limit);
             let worker = RteBox::new(
-                Worker::new(mempool, shaper, stat.clone(), is_running.clone()),
+                Worker::new(mempool, shaper, self.stats.stats[idx].clone(), is_running.clone()),
                 socket_id,
             )?;
 
-            self.stats.insert(core, stat);
             self.workers.insert(core, worker);
         }
 
@@ -444,10 +446,10 @@ struct Worker {
     src_mac: MacAddr,
     mempool: *mut dpdk::ffi::rte_mempool,
     mbufs_count: usize,
-    mbufs: [*mut dpdk::ffi::rte_mbuf; MBUFS_COUNT as usize],
-    recv_mbufs: [*mut dpdk::ffi::rte_mbuf; MBUFS_BURST_SIZE as usize],
+    mbufs: Vec<*mut dpdk::ffi::rte_mbuf>,
+    recv_mbufs: Vec<*mut dpdk::ffi::rte_mbuf>,
     shaper: Shaper,
-    stat: Arc<LocalStat>,
+    stat: Arc<WorkerStat>,
     is_running: Arc<AtomicBool>,
     packets_count_tx: usize,
 }
@@ -456,7 +458,7 @@ impl Worker {
     pub fn new(
         mempool: *mut dpdk::ffi::rte_mempool,
         shaper: Shaper,
-        stat: Arc<LocalStat>,
+        stat: Arc<WorkerStat>,
         is_running: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -466,8 +468,8 @@ impl Worker {
             src_mac: Default::default(),
             mempool,
             mbufs_count: 0,
-            mbufs: [core::ptr::null_mut(); MBUFS_COUNT as usize],
-            recv_mbufs: [core::ptr::null_mut(); MBUFS_BURST_SIZE as usize],
+            mbufs: vec![core::ptr::null_mut(); MBUFS_COUNT as usize],
+            recv_mbufs: vec![core::ptr::null_mut(); MBUFS_BURST_SIZE as usize],
             shaper,
             stat,
             is_running,
@@ -518,6 +520,7 @@ impl Worker {
 
                     self.packets_count_tx += tx_size as usize;
                     self.stat.on_requests(tx_size as u64);
+                    self.stat.on_bursts_tx(tx_size as u64);
                     self.stat.on_send(size);
 
                     self.shaper.consume(tokens);
@@ -600,70 +603,5 @@ mod nl {
         }
 
         Ok(out)
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct LocalStat {
-    num_requests: UnsafeCell<u64>,
-    bytes_tx: UnsafeCell<u64>,
-    bursts_tx: [UnsafeCell<u64>; 32],
-}
-
-unsafe impl Sync for LocalStat {}
-
-#[derive(Debug, Default)]
-pub struct Stat {
-    generator: AtomicU64,
-    stats: Vec<Arc<LocalStat>>,
-}
-
-impl Stat {
-    pub fn new(stats: Vec<Arc<LocalStat>>) -> Self {
-        Self { stats, ..Default::default() }
-    }
-}
-
-impl CommonStat for Stat {
-    #[inline]
-    fn generator(&self) -> u64 {
-        self.generator.load(Ordering::Relaxed)
-    }
-
-    #[inline]
-    fn on_generator(&self, v: u64) {
-        self.generator.store(v, Ordering::Relaxed);
-    }
-}
-
-impl TxStat for Stat {
-    #[inline]
-    fn num_requests(&self) -> u64 {
-        self.stats.iter().map(|v| unsafe { *v.num_requests.get() }).sum()
-    }
-
-    #[inline]
-    fn bytes_tx(&self) -> u64 {
-        self.stats.iter().map(|v| unsafe { *v.bytes_tx.get() }).sum()
-    }
-}
-
-impl BurstTxStat for Stat {
-    #[inline]
-    fn num_bursts_tx(&self, idx: usize) -> u64 {
-        self.stats.iter().map(|v| unsafe { *v.bursts_tx[idx].get() }).sum()
-    }
-}
-
-impl LocalStat {
-    #[inline]
-    pub fn on_requests(&self, n: u64) {
-        unsafe { *self.num_requests.get() += n };
-        unsafe { *self.bursts_tx[n as usize - 1].get() += 1 };
-    }
-
-    #[inline]
-    pub fn on_send(&self, n: u64) {
-        unsafe { *self.bytes_tx.get() += n };
     }
 }
