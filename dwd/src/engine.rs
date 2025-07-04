@@ -4,18 +4,15 @@ use core::{
     time::Duration,
 };
 use std::{
-    error::Error,
     sync::Arc,
-    thread::{self, Builder, JoinHandle},
+    thread::{Builder, JoinHandle},
 };
 
-use bytes::Bytes;
-use http_body_util::Empty;
-use hyper::Request;
+use anyhow::Error;
 use tokio::sync::mpsc::{self, Receiver};
 
 #[cfg(feature = "dpdk")]
-use crate::{cfg::DpdkConfig, worker::dpdk::DpdkEngine};
+use crate::worker::dpdk::DpdkEngine;
 use crate::{
     cfg::{Config, ModeConfig},
     engine::{
@@ -23,7 +20,7 @@ use crate::{
         udp::Engine as UdpEngine,
     },
     generator::{Generator, SuspendableGenerator},
-    stat::CommonStat,
+    stat::SharedGenerator,
     ui::{self, Ui},
     GeneratorEvent,
 };
@@ -39,6 +36,124 @@ trait Task {
     async fn execute(&mut self);
 }
 
+trait Engine: Send {
+    fn generator(&self) -> SharedGenerator;
+    fn limits(&self) -> Vec<Arc<AtomicU64>>;
+    fn ui(&self) -> (Ui, Receiver<GeneratorEvent>);
+    fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error>;
+}
+
+impl Engine for HttpEngine {
+    fn generator(&self) -> SharedGenerator {
+        self.stat().generator()
+    }
+
+    fn limits(&self) -> Vec<Arc<AtomicU64>> {
+        self.limits().into_iter().flatten().collect()
+    }
+
+    fn ui(&self) -> (Ui, Receiver<GeneratorEvent>) {
+        let (tx, rx) = mpsc::channel(1);
+
+        let stat = self.stat();
+        let ui = Ui::new(tx)
+            .with_common(stat.clone())
+            .with_tx(stat.clone())
+            .with_rx(stat.clone())
+            .with_http(stat.clone())
+            .with_sock(stat.clone())
+            .with_rx_timings(stat.clone());
+
+        (ui, rx)
+    }
+
+    fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error> {
+        Self::run(*self, future::pending(), is_running)
+    }
+}
+
+impl Engine for HttpEngineRaw {
+    fn generator(&self) -> SharedGenerator {
+        self.stat().generator()
+    }
+
+    fn limits(&self) -> Vec<Arc<AtomicU64>> {
+        self.limits().into_iter().flatten().collect()
+    }
+
+    fn ui(&self) -> (Ui, Receiver<GeneratorEvent>) {
+        let (tx, rx) = mpsc::channel(1);
+        let stat = self.stat();
+
+        let ui = Ui::new(tx)
+            .with_common(stat.clone())
+            .with_tx(stat.clone())
+            .with_rx(stat.clone())
+            .with_http(stat.clone())
+            .with_sock(stat.clone())
+            .with_rx_timings(stat.clone());
+
+        (ui, rx)
+    }
+
+    fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error> {
+        Self::run(*self, future::pending(), is_running)
+    }
+}
+
+impl Engine for UdpEngine {
+    fn generator(&self) -> SharedGenerator {
+        self.stat().generator()
+    }
+
+    fn limits(&self) -> Vec<Arc<AtomicU64>> {
+        Self::limits(self)
+    }
+
+    fn ui(&self) -> (Ui, Receiver<GeneratorEvent>) {
+        let (tx, rx) = mpsc::channel(1);
+        let stat = self.stat();
+
+        let ui = Ui::new(tx)
+            .with_common(stat.clone())
+            .with_tx(stat.clone())
+            .with_sock(stat.clone());
+
+        (ui, rx)
+    }
+
+    fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error> {
+        Self::run(*self, future::pending(), is_running)
+    }
+}
+
+#[cfg(feature = "dpdk")]
+impl Engine for DpdkEngine {
+    fn generator(&self) -> SharedGenerator {
+        self.stat().generator()
+    }
+
+    fn limits(&self) -> Vec<Arc<AtomicU64>> {
+        self.pps_limits()
+    }
+
+    fn ui(&self) -> (Ui, Receiver<GeneratorEvent>) {
+        let (tx, rx) = mpsc::channel(1);
+        let stat = self.stat();
+
+        let ui = Ui::new(tx)
+            .with_common(stat.clone())
+            .with_tx(stat.clone())
+            .with_burst_tx(stat.clone());
+
+        (ui, rx)
+    }
+
+    fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error> {
+        Self::run(*self, is_running)
+    }
+}
+
 #[derive(Debug)]
 pub struct Runtime {
     cfg: Config,
@@ -52,119 +167,18 @@ impl Runtime {
         Self { cfg, is_running }
     }
 
-    pub async fn run(self) -> Result<(), Box<dyn Error>> {
-        match self.cfg.mode.clone() {
-            ModeConfig::Http(cfg) => {
-                self.run_http(cfg).await?;
-            }
-            ModeConfig::HttpRaw(cfg) => {
-                self.run_http_raw(cfg).await?;
-            }
-            ModeConfig::Udp(cfg) => {
-                self.run_udp(cfg).await?;
-            }
+    pub async fn run(self) -> Result<(), Error> {
+        let engine: Box<dyn Engine> = match self.cfg.mode.clone() {
+            ModeConfig::Http(cfg) => Box::new(HttpEngine::new(cfg)),
+            ModeConfig::HttpRaw(cfg) => Box::new(HttpEngineRaw::new(cfg)),
+            ModeConfig::Udp(cfg) => Box::new(UdpEngine::new(cfg)),
             #[cfg(feature = "dpdk")]
-            ModeConfig::Dpdk(cfg) => {
-                self.run_dpdk(cfg.clone()).await?;
-            }
+            ModeConfig::Dpdk(cfg) => Box::new(DpdkEngine::new(cfg.into_inner())?),
         };
 
-        Ok(())
-    }
-
-    pub async fn run_http(self, cfg: http::Config<Request<Empty<Bytes>>>) -> Result<(), Box<dyn Error>> {
-        let engine = HttpEngine::new(cfg);
-        let stat = engine.stat();
-        let limits = engine.limits().into_iter().flatten().collect();
-
-        let engine = {
-            let is_running = self.is_running.clone();
-            Builder::new().spawn(move || engine.run(future::pending(), is_running))?
-        };
-
-        let (tx, rx) = mpsc::channel(1);
-
-        let ui = Ui::new(tx)
-            .with_common(stat.clone())
-            .with_tx(stat.clone())
-            .with_rx(stat.clone())
-            .with_http(stat.clone())
-            .with_sock(stat.clone())
-            .with_rx_timings(stat.clone());
-        let ui = self.run_ui(ui)?;
-
-        let (shaper,) = tokio::join!(self.run_generator(limits, stat.clone(), rx));
-        shaper?;
-
-        ui.join().expect("no self join").unwrap();
-        engine.join().expect("no self join")?;
-
-        Ok(())
-    }
-
-    pub async fn run_http_raw(self, cfg: http::Config<Bytes>) -> Result<(), Box<dyn Error>> {
-        let engine = HttpEngineRaw::new(cfg);
-        let stat = engine.stat();
-        let limits = engine.limits().into_iter().flatten().collect();
-
-        let engine = {
-            let is_running = self.is_running.clone();
-            Builder::new().spawn(move || engine.run(future::pending(), is_running))?
-        };
-
-        let (tx, rx) = mpsc::channel(1);
-
-        let ui = Ui::new(tx)
-            .with_common(stat.clone())
-            .with_tx(stat.clone())
-            .with_rx(stat.clone())
-            .with_http(stat.clone())
-            .with_sock(stat.clone())
-            .with_rx_timings(stat.clone());
-        let ui = self.run_ui(ui)?;
-
-        let (shaper,) = tokio::join!(self.run_generator(limits, stat.clone(), rx));
-        shaper?;
-
-        ui.join().expect("no self join").unwrap();
-        engine.join().expect("no self join")?;
-
-        Ok(())
-    }
-
-    pub async fn run_udp(self, cfg: udp::Config) -> Result<(), Box<dyn Error>> {
-        let engine = UdpEngine::new(cfg);
-        let stat = engine.stat();
         let limits = engine.limits();
-
-        let engine = {
-            let is_running = self.is_running.clone();
-            Builder::new().spawn(move || engine.run(future::pending(), is_running))?
-        };
-
-        let (tx, rx) = mpsc::channel(1);
-
-        let ui = Ui::new(tx)
-            .with_common(stat.clone())
-            .with_tx(stat.clone())
-            .with_sock(stat.clone());
-        let ui = self.run_ui(ui)?;
-
-        let (shaper,) = tokio::join!(self.run_generator(limits, stat.clone(), rx));
-        shaper?;
-
-        ui.join().expect("no self join").unwrap();
-        engine.join().expect("no self join")?;
-
-        Ok(())
-    }
-
-    #[cfg(feature = "dpdk")]
-    async fn run_dpdk(self, cfg: DpdkConfig) -> Result<(), Box<dyn Error>> {
-        let cfg = cfg.into_inner();
-        let engine = DpdkEngine::new(cfg)?;
-        let stat = engine.stats();
-        let limits = engine.pps_limits();
+        let generator = engine.generator();
+        let (ui, rx) = engine.ui();
 
         let engine = {
             let is_running = self.is_running.clone();
@@ -173,15 +187,9 @@ impl Runtime {
                 .spawn(move || engine.run(is_running))?
         };
 
-        let (tx, rx) = mpsc::channel(1);
-
-        let ui = Ui::new(tx)
-            .with_common(stat.clone())
-            .with_tx(stat.clone())
-            .with_burst_tx(stat.clone());
         let ui = self.run_ui(ui)?;
 
-        let (shaper,) = tokio::join!(self.run_generator(limits, stat, rx));
+        let (shaper,) = tokio::join!(self.run_generator(limits, generator, rx));
         shaper?;
 
         ui.join().expect("no self join").unwrap();
@@ -190,15 +198,12 @@ impl Runtime {
         Ok(())
     }
 
-    async fn run_generator<S>(
+    async fn run_generator(
         &self,
         limits: Vec<Arc<AtomicU64>>,
-        stat: Arc<S>,
+        generator: SharedGenerator,
         mut rx: Receiver<GeneratorEvent>,
-    ) -> Result<(), Box<dyn Error>>
-    where
-        S: CommonStat,
-    {
+    ) -> Result<(), Error> {
         let g = self.cfg.generator_fn.create()?;
         let mut g = SuspendableGenerator::new(g);
         g.activate();
@@ -227,7 +232,7 @@ impl Runtime {
                 limit.store(lb, Ordering::Relaxed);
             }
 
-            stat.on_generator(v);
+            generator.store(v);
 
             // TODO: configurable sleep time.
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -237,10 +242,10 @@ impl Runtime {
         Ok(())
     }
 
-    fn run_ui(&self, ui: Ui) -> Result<JoinHandle<Result<(), Box<dyn Error + Send + Sync>>>, Box<dyn Error>> {
+    fn run_ui(&self, ui: Ui) -> Result<JoinHandle<Result<(), Box<dyn core::error::Error + Send + Sync>>>, Error> {
         let is_running = self.is_running.clone();
 
-        let thread = thread::Builder::new().spawn(move || {
+        let thread = Builder::new().name("ui".into()).spawn(move || {
             let rc = ui::run(ui);
             is_running.store(false, Ordering::SeqCst);
             rc

@@ -1,15 +1,18 @@
-use core::{error::Error, f64::consts::PI, num::NonZeroU16, time::Duration};
+use core::{f64::consts::PI, num::NonZeroU16, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use std::{fs, path::Path};
 
+use anyhow::Error;
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
 use serde::{Deserialize, Serialize};
 
 pub trait GeneratorFactory {
-    fn create(self) -> Result<Box<dyn Generator>, Box<dyn Error>>;
+    fn create(self) -> Result<Box<dyn Generator>, Error>;
+    #[allow(unused)]
     fn reduce(&mut self, factor: NonZeroU16);
+    #[allow(unused)]
     fn duration(&self) -> Duration;
 }
 
@@ -24,7 +27,7 @@ pub enum Config {
 }
 
 impl GeneratorFactory for Config {
-    fn create(self) -> Result<Box<dyn Generator>, Box<dyn Error>> {
+    fn create(self) -> Result<Box<dyn Generator>, Error> {
         match self {
             Config::Const(c) => c.create(),
             Config::Line(c) => c.create(),
@@ -63,7 +66,7 @@ pub struct ConstGeneratorConfig {
 }
 
 impl GeneratorFactory for ConstGeneratorConfig {
-    fn create(self) -> Result<Box<dyn Generator>, Box<dyn Error>> {
+    fn create(self) -> Result<Box<dyn Generator>, Error> {
         let g = LineGenerator::new(self.rps, self.rps, Duration::from_secs(self.duration));
 
         Ok(Box::new(g))
@@ -86,7 +89,7 @@ pub struct LineGeneratorConfig {
 }
 
 impl GeneratorFactory for LineGeneratorConfig {
-    fn create(self) -> Result<Box<dyn Generator>, Box<dyn Error>> {
+    fn create(self) -> Result<Box<dyn Generator>, Error> {
         let (rps0, rps1) = self.rps;
         let g = LineGenerator::new(rps0, rps1, Duration::from_secs(self.duration));
 
@@ -115,7 +118,7 @@ pub struct SinGeneratorConfig {
 }
 
 impl SinGeneratorConfig {
-    fn find_closest_phase(&self, pps_mid: f64, a: f64) -> Result<(f64, f64), Box<dyn Error>> {
+    fn find_closest_phase(&self, pps_mid: f64, a: f64) -> Result<(f64, f64), Error> {
         let mut prev_err = f64::INFINITY;
         let mut prev_phase = 0.0;
         let mut prev_k = 0.0;
@@ -136,12 +139,12 @@ impl SinGeneratorConfig {
             prev_err = err;
         }
 
-        Err("failed to find parameters for sin function".into())
+        Err(Error::msg("failed to find parameters for sin function"))
     }
 }
 
 impl GeneratorFactory for SinGeneratorConfig {
-    fn create(self) -> Result<Box<dyn Generator>, Box<dyn Error>> {
+    fn create(self) -> Result<Box<dyn Generator>, Error> {
         let a = (self.pps_max as f64 - self.pps_min as f64) / 2.0;
         let pps_mid = self.pps_min as f64 + a;
         let (phase, k) = self.find_closest_phase(pps_mid, a)?;
@@ -169,8 +172,8 @@ pub struct SeqGeneratorConfig {
 }
 
 impl GeneratorFactory for SeqGeneratorConfig {
-    fn create(self) -> Result<Box<dyn Generator>, Box<dyn Error>> {
-        let generators: Result<Vec<Box<dyn Generator>>, Box<dyn Error>> =
+    fn create(self) -> Result<Box<dyn Generator>, Error> {
+        let generators: Result<Vec<Box<dyn Generator>>, Error> =
             self.generators.into_iter().map(|v| v.create()).collect();
         let g = SeqGenerator::new(generators?);
 
@@ -199,8 +202,8 @@ pub struct SumGeneratorConfig {
 }
 
 impl GeneratorFactory for SumGeneratorConfig {
-    fn create(self) -> Result<Box<dyn Generator>, Box<dyn Error>> {
-        let generators: Result<Vec<Box<dyn Generator>>, Box<dyn Error>> =
+    fn create(self) -> Result<Box<dyn Generator>, Error> {
+        let generators: Result<Vec<Box<dyn Generator>>, Error> =
             self.generators.into_iter().map(|v| v.create()).collect();
         let g = SumGenerator::new(generators?);
 
@@ -549,14 +552,14 @@ impl Generator for SumGenerator {
     }
 }
 
-pub fn load<P: AsRef<Path>>(path: P) -> Result<Box<dyn Generator>, Box<dyn Error>> {
+pub fn load<P: AsRef<Path>>(path: P) -> Result<Box<dyn Generator>, Error> {
     let cfg = load_config(path)?;
     let gen = cfg.create()?;
 
     Ok(gen)
 }
 
-pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config, Box<dyn Error>> {
+pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config, Error> {
     let data = fs::read(path)?;
     let cfg: Config = serde_yaml::from_slice(&data)?;
 

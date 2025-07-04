@@ -209,7 +209,7 @@ impl DpdkEngine {
         self.pps_limits.values().cloned().collect()
     }
 
-    pub fn stats(&self) -> Arc<EngineStat> {
+    pub fn stat(&self) -> Arc<EngineStat> {
         self.stats.clone()
     }
 

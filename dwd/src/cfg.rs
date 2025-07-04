@@ -44,7 +44,7 @@ impl TryFrom<Cmd> for Config {
         let generator_fn = {
             let path = v.generator.clone();
 
-            Box::new(move || -> Result<Box<dyn Generator>, Box<dyn Error>> {
+            Box::new(move || -> Result<Box<dyn Generator>, anyhow::Error> {
                 match &path {
                     Some(path) => generator::load(path),
                     None => {
@@ -189,11 +189,11 @@ impl TryFrom<DpdkCmd> for DpdkConfig {
 }
 
 pub type BoxedGenerator = Box<dyn Generator>;
-pub struct BoxedGeneratorNew(Box<dyn Fn() -> Result<BoxedGenerator, Box<dyn Error>> + Send>);
+pub struct BoxedGeneratorNew(Box<dyn Fn() -> Result<BoxedGenerator, anyhow::Error>>);
 
 impl BoxedGeneratorNew {
     #[inline]
-    pub fn create(&self) -> Result<BoxedGenerator, Box<dyn Error>> {
+    pub fn create(&self) -> Result<BoxedGenerator, anyhow::Error> {
         match self {
             Self(f) => f(),
         }
