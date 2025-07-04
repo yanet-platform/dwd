@@ -1,13 +1,12 @@
-pub use self::percpu::{
-    BurstTxWorkerStat, HttpWorkerStat, PerCpuStat, RxWorkerStat, SockWorkerStat, Stat, TxWorkerStat,
-};
+#[cfg(feature = "dpdk")]
+pub use self::percpu::BurstTxWorkerStat;
+pub use self::percpu::{HttpWorkerStat, PerCpuStat, RxWorkerStat, SharedGenerator, SockWorkerStat, Stat, TxWorkerStat};
 use crate::histogram::LogHistogram;
 
 mod percpu;
 
 pub trait CommonStat {
     fn generator(&self) -> u64;
-    fn on_generator(&self, v: u64);
 }
 
 pub trait TxStat {

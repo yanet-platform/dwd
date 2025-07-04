@@ -35,6 +35,7 @@ fn run(cmd: Cmd) -> Result<(), Box<dyn Error>> {
         .block_on(async {
             let runtime = Runtime::new(cfg);
 
-            runtime.run().await
+            runtime.run().await?;
+            Ok(())
         })
 }

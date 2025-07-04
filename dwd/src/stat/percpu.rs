@@ -10,9 +10,30 @@ use crate::{
     stat::BurstTxStat,
 };
 
+#[derive(Debug, Clone)]
+pub struct SharedGenerator {
+    counter: Arc<AtomicU64>,
+}
+
+impl SharedGenerator {
+    pub fn new() -> Self {
+        Self {
+            counter: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn load(&self) -> u64 {
+        self.counter.load(Ordering::Relaxed)
+    }
+
+    pub fn store(&self, v: u64) {
+        self.counter.store(v, Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug)]
 pub struct Stat<T, R, S, H, B> {
-    generator: AtomicU64,
+    generator: SharedGenerator,
     pub stats: Vec<Arc<PerCpuStat<T, R, S, H, B>>>,
 }
 
@@ -25,19 +46,18 @@ where
     B: Default,
 {
     pub fn new(stats: Vec<Arc<PerCpuStat<T, R, S, H, B>>>) -> Self {
-        Self { generator: AtomicU64::new(0), stats }
+        Self { generator: SharedGenerator::new(), stats }
+    }
+
+    pub fn generator(&self) -> SharedGenerator {
+        self.generator.clone()
     }
 }
 
 impl<T, R, S, H, B> CommonStat for Stat<T, R, S, H, B> {
     #[inline]
     fn generator(&self) -> u64 {
-        self.generator.load(Ordering::Relaxed)
-    }
-
-    #[inline]
-    fn on_generator(&self, v: u64) {
-        self.generator.store(v, Ordering::Relaxed);
+        self.generator.load()
     }
 }
 
