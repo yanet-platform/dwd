@@ -9,7 +9,7 @@ use metric::Quantile;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::{Backend, CrosstermBackend},
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Bar, BarChart, BarGroup, Block},
     Frame, Terminal,
@@ -598,6 +598,7 @@ impl BurstTxStatWidget {
                     .value(value.get())
                     .label(Line::from(format!("[{:02}-{:02}]", 2 * pps + 1, 2 * pps + 2)))
                     .style(Style::default().fg(color))
+                    .value_style(Style::default().fg(color).reversed())
             })
             .collect();
 
