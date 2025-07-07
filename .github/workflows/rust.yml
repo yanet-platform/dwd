@@ -20,3 +20,30 @@ jobs:
       run: cargo build -p dwd --verbose
     - name: Run tests
       run: cargo test -p dwd --verbose
+
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config dpkg-dev debhelper \
+          dpdk libdpdk-dev libibverbs-dev ibverbs-providers libnuma-dev \
+          clang llvm-dev libelf-dev
+
+    - name: Install cargo-deb
+      run: cargo install cargo-deb --locked
+
+    - name: Build Debian package
+      run: cargo deb -p dwd --features dpdk --verbose
+
+    - name: Upload Debian package artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: dwd-debian-package
+        path: target/debian/*.deb
