@@ -54,3 +54,7 @@ netlink-sys = { version = "0.8" }
 
 [features]
 dpdk = ["dep:dpdk", "dep:thiserror", "dep:pcap-parser", "dep:etherparse"]
+
+[package.metadata.deb]
+depends = "ibverbs-providers (>= 16), libc6 (>= 2.27), libibverbs1 (>= 1.1.6), libnuma1 (>= 2.0.11)"
+features = ["dpdk"]
