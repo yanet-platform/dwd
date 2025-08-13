@@ -158,6 +158,13 @@ pub struct NativeLoadCmd {
     /// If none given (the default) sockets renew is disabled.
     #[clap(long)]
     pub requests_per_socket: Option<u64>,
+    /// Deviation of the number of requests per socket.
+    ///
+    /// For example, if the number of requests per socket is 1000 and the
+    /// deviation is 100, then the number of requests per socket will be
+    /// between 900 and 1100.
+    #[clap(long)]
+    pub requests_per_socket_deviation: Option<u64>,
     /// IP prefix used to collect this machine's global unicast IP addresses and
     /// use them as bind addresses.
     ///

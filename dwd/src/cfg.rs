@@ -99,6 +99,8 @@ pub struct NativeLoadConfig {
     /// Maximum number of requests executed per socket before reconnection.
     /// If none given (default) sockets renew is disabled.
     requests_per_socket: Option<u64>,
+    /// Deviation of the number of requests per socket.
+    requests_per_socket_deviation: Option<u64>,
     /// Socket addresses to bind on.
     pub bind_endpoints: Arc<VecProduce<SocketAddr>>,
 }
@@ -110,6 +112,12 @@ impl NativeLoadConfig {
     pub fn requests_per_socket(&self) -> u64 {
         self.requests_per_socket.unwrap_or(u64::MAX)
     }
+
+    /// Returns the deviation of the number of requests per socket.
+    #[inline]
+    pub fn requests_per_socket_deviation(&self) -> u64 {
+        self.requests_per_socket_deviation.unwrap_or(0)
+    }
 }
 
 impl TryFrom<NativeLoadCmd> for NativeLoadConfig {
@@ -119,6 +127,7 @@ impl TryFrom<NativeLoadCmd> for NativeLoadConfig {
         let NativeLoadCmd {
             threads,
             requests_per_socket,
+            requests_per_socket_deviation,
             bind_network,
         } = cmd;
 
@@ -149,6 +158,7 @@ impl TryFrom<NativeLoadCmd> for NativeLoadConfig {
         let m = Self {
             threads,
             requests_per_socket,
+            requests_per_socket_deviation,
             bind_endpoints,
         };
 
