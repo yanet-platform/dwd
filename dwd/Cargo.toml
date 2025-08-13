@@ -1,6 +1,6 @@
 [package]
 name = "dwd"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 rust-version = "1.87"
 publish = true
@@ -44,6 +44,7 @@ anyhow = "1"
 pnet = "0.35"
 libc = "0.2"
 jemallocator = "0.5"
+rand = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-packet-core = { version = "0.7" }

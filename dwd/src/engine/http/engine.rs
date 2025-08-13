@@ -2,6 +2,7 @@ use core::{
     future::Future,
     net::SocketAddr,
     num::NonZero,
+    ops::RangeInclusive,
     sync::atomic::{AtomicBool, AtomicU64},
     time::Duration,
 };
@@ -16,6 +17,7 @@ use bytes::Bytes;
 use http::Request;
 use http_body_util::{BodyExt, Empty};
 use hyper::client::conn::http1::{self, SendRequest};
+use rand::{rngs::ThreadRng, Rng};
 use tokio::net::TcpSocket;
 
 use super::cfg::Config;
@@ -86,17 +88,24 @@ impl Engine {
             let bind = bind.clone();
             let data = data.clone();
             let requests_per_socket = self.cfg.native.requests_per_socket();
+            let requests_per_socket_deviation = self.cfg.native.requests_per_socket_deviation();
             let stat = self.stat.stats[tid].clone();
             let is_running = is_running.clone();
             let limits = self.limits[tid].clone();
             let num_tasks = NonZero::new(limits.len()).unwrap();
 
             let set = TaskSet::new(num_tasks, move |idx: usize| {
+                let requests_per_socket_gen = if requests_per_socket_deviation > 0 {
+                    RequestsPerSocket::uniform(requests_per_socket, requests_per_socket_deviation)
+                } else {
+                    RequestsPerSocket::fixed(requests_per_socket)
+                };
+
                 let job = CoroWorker::new(
                     self.cfg.addr,
                     bind.clone(),
                     data.clone(),
-                    requests_per_socket,
+                    requests_per_socket_gen,
                     self.cfg.timeout,
                     self.cfg.tcp_linger,
                     self.cfg.tcp_no_delay,
@@ -118,6 +127,33 @@ impl Engine {
     }
 }
 
+#[derive(Debug)]
+enum RequestsPerSocket {
+    Fixed(u64),
+    Uniform(ThreadRng, RangeInclusive<u64>),
+}
+
+impl RequestsPerSocket {
+    pub fn fixed(requests_per_socket: u64) -> Self {
+        Self::Fixed(requests_per_socket)
+    }
+
+    // TODO: non-zero.
+    pub fn uniform(requests_per_socket: u64, requests_per_socket_deviation: u64) -> Self {
+        let min = requests_per_socket.saturating_sub(requests_per_socket_deviation);
+        let max = requests_per_socket.saturating_add(requests_per_socket_deviation);
+
+        Self::Uniform(ThreadRng::default(), min..=max)
+    }
+
+    #[inline]
+    pub fn next(&mut self) -> u64 {
+        match self {
+            Self::Fixed(requests_per_socket) => *requests_per_socket,
+            Self::Uniform(rng, range) => rng.random_range(range.clone()),
+        }
+    }
+}
 /// Per-task worker.
 #[derive(Debug)]
 struct CoroWorker<B, D> {
@@ -129,12 +165,12 @@ struct CoroWorker<B, D> {
     data: D,
     /// Current TCP socket.
     stream: Option<TcpStream>,
-    /// The number of requests after which the socket will be recreated.
-    requests_per_sock: u64,
-    /// Number of requests done for the currently active socket.
+    /// The number of requests left for the currently active socket.
     ///
-    /// Must be reset to zero when a new socket is created.
-    requests_per_sock_done: u64,
+    /// Must be reset when a new socket is created.
+    requests_per_sock_left: u64,
+    /// Generator for the number of requests per socket.
+    requests_per_sock_gen: RequestsPerSocket,
     /// Request timeout.
     timeout: Duration,
     /// Set linger TCP option with specified value.
@@ -150,19 +186,21 @@ impl<B, D> CoroWorker<B, D> {
         addr: SocketAddr,
         bind: B,
         data: D,
-        requests_per_sock: u64,
+        mut requests_per_sock_gen: RequestsPerSocket,
         timeout: Duration,
         tcp_linger: Option<u64>,
         tcp_no_delay: bool,
         stat: Arc<WorkerStat>,
     ) -> Self {
+        let requests_per_sock_left = requests_per_sock_gen.next();
+
         Self {
             addr,
             bind,
             data,
             stream: None,
-            requests_per_sock,
-            requests_per_sock_done: 0,
+            requests_per_sock_left,
+            requests_per_sock_gen,
             timeout,
             tcp_linger,
             tcp_no_delay,
@@ -212,14 +250,15 @@ where
             c => log::error!("unexpected code: {}", c),
         }
 
-        self.requests_per_sock_done += 1;
-        if self.requests_per_sock_done < self.requests_per_sock {
-            if self.requests_per_sock_done % 32 == 0 {
+        self.requests_per_sock_left = self.requests_per_sock_left.saturating_sub(1);
+        if self.requests_per_sock_left == 0 {
+            if self.requests_per_sock_left % 32 == 0 {
                 sock.stat.update();
             }
+
             self.stream = Some(sock);
         } else {
-            self.requests_per_sock_done = 0;
+            self.requests_per_sock_left = self.requests_per_sock_gen.next();
         }
     }
 
