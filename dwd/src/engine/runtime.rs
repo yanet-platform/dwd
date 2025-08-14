@@ -4,24 +4,25 @@ use std::thread::Builder;
 use anyhow::Error;
 use tokio::runtime::LocalRuntime;
 
+/// Represents a thread pool for running workers each in a separate thread.
 #[derive(Debug)]
-pub struct WorkerRuntime<F> {
+pub struct ThreadPool<F> {
     num_threads: NonZero<usize>,
     factory: F,
 }
 
-impl<F> WorkerRuntime<F> {
+impl<F> ThreadPool<F> {
     pub fn new(num_threads: NonZero<usize>, factory: F) -> Self {
         Self { num_threads, factory }
     }
 }
 
-impl<F, U> WorkerRuntime<F>
+impl<F, U> ThreadPool<F>
 where
     F: FnMut(usize) -> U,
     U: FnOnce() -> Result<(), Error> + Send + 'static,
 {
-    /// Runs this worker runtime by spawning threads and waiting for them to
+    /// Runs this [`ThreadPool`] by spawning threads and waiting for them to
     /// complete.
     pub fn run(mut self) -> Result<(), Error> {
         let num_threads = self.num_threads.get();
@@ -48,18 +49,18 @@ where
 
 /// Per-CPU task set.
 #[derive(Debug)]
-pub struct TaskSet<F> {
+pub struct LocalTaskPool<F> {
     num_tasks: NonZero<usize>,
     factory: F,
 }
 
-impl<F> TaskSet<F> {
+impl<F> LocalTaskPool<F> {
     pub fn new(num_tasks: NonZero<usize>, factory: F) -> Self {
         Self { factory, num_tasks }
     }
 }
 
-impl<F, T> TaskSet<F>
+impl<F, T> LocalTaskPool<F>
 where
     F: FnMut(usize) -> T,
     T: Future + 'static,

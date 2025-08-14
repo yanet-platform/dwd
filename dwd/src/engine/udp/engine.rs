@@ -10,7 +10,7 @@ use anyhow::Error;
 
 use super::Config;
 use crate::{
-    engine::runtime::WorkerRuntime,
+    engine::runtime::ThreadPool,
     shaper::Shaper,
     stat::{PerCpuStat, SockWorkerStat, Stat, TxWorkerStat},
     OneProduce, Produce,
@@ -62,7 +62,7 @@ impl Engine {
         let bind = self.cfg.native.bind_endpoints.clone();
         let data = Arc::new(OneProduce::new(b"GET / HTTP/1.1\r\n\r\n".to_vec()));
 
-        let rt = WorkerRuntime::new(num_threads, move |tid: usize| {
+        let rt = ThreadPool::new(num_threads, move |tid: usize| {
             let bind = bind.clone();
             let data = data.clone();
             let stat = self.stat.stats[tid].clone();

@@ -18,7 +18,7 @@ use super::cfg::Config;
 use crate::{
     engine::{
         coro::ShapedCoroWorker,
-        runtime::{TaskSet, WorkerRuntime},
+        runtime::{LocalTaskPool, ThreadPool},
         Task,
     },
     shaper::Shaper,
@@ -77,7 +77,7 @@ impl EngineRaw {
         let bind = self.cfg.native.bind_endpoints.clone();
         let data = Arc::new(VecProduce::new(self.cfg.requests.clone()));
 
-        let rt = WorkerRuntime::new(num_threads, |tid: usize| {
+        let rt = ThreadPool::new(num_threads, |tid: usize| {
             let bind = bind.clone();
             let data = data.clone();
             let requests_per_socket = self.cfg.native.requests_per_socket();
@@ -86,7 +86,7 @@ impl EngineRaw {
             let limits = self.limits[tid].clone();
             let num_tasks = NonZero::new(limits.len()).unwrap();
 
-            let set = TaskSet::new(num_tasks, move |idx: usize| {
+            let set = LocalTaskPool::new(num_tasks, move |idx: usize| {
                 let job = CoroWorker::new(
                     self.cfg.addr,
                     bind.clone(),

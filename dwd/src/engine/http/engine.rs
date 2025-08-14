@@ -25,7 +25,7 @@ use crate::{
     engine::{
         coro::ShapedCoroWorker,
         http::io::TokioIo,
-        runtime::{TaskSet, WorkerRuntime},
+        runtime::{LocalTaskPool, ThreadPool},
         Task,
     },
     shaper::Shaper,
@@ -84,7 +84,7 @@ impl Engine {
         let bind = self.cfg.native.bind_endpoints.clone();
         let data = Arc::new(VecProduce::new(self.cfg.requests.clone()));
 
-        let rt = WorkerRuntime::new(num_threads, |tid: usize| {
+        let thread_pool = ThreadPool::new(num_threads, |tid: usize| {
             let bind = bind.clone();
             let data = data.clone();
             let requests_per_socket = self.cfg.native.requests_per_socket();
@@ -94,7 +94,7 @@ impl Engine {
             let limits = self.limits[tid].clone();
             let num_tasks = NonZero::new(limits.len()).unwrap();
 
-            let set = TaskSet::new(num_tasks, move |idx: usize| {
+            let set = LocalTaskPool::new(num_tasks, move |idx: usize| {
                 let requests_per_socket_gen = if requests_per_socket_deviation > 0 {
                     RequestsPerSocket::uniform(requests_per_socket, requests_per_socket_deviation)
                 } else {
@@ -121,7 +121,7 @@ impl Engine {
             || set.run()
         });
 
-        rt.run()?;
+        thread_pool.run()?;
 
         Ok(())
     }
@@ -154,7 +154,8 @@ impl RequestsPerSocket {
         }
     }
 }
-/// Per-task worker.
+
+/// Per-task HTTP worker.
 #[derive(Debug)]
 struct CoroWorker<B, D> {
     /// Target endpoint.
@@ -186,12 +187,13 @@ impl<B, D> CoroWorker<B, D> {
         addr: SocketAddr,
         bind: B,
         data: D,
-        mut requests_per_sock_gen: RequestsPerSocket,
+        requests_per_sock_gen: RequestsPerSocket,
         timeout: Duration,
         tcp_linger: Option<u64>,
         tcp_no_delay: bool,
         stat: Arc<WorkerStat>,
     ) -> Self {
+        let mut requests_per_sock_gen = requests_per_sock_gen;
         let requests_per_sock_left = requests_per_sock_gen.next();
 
         Self {
@@ -241,13 +243,15 @@ where
             }
         };
 
+        // TODO: self.process_response(sock, code, now).await;
+
         self.stat.on_response(now);
         match code {
             c if (200..300).contains(&c) => self.stat.on_2xx(),
             c if (300..400).contains(&c) => self.stat.on_3xx(),
             c if (400..500).contains(&c) => self.stat.on_4xx(),
             c if (500..600).contains(&c) => self.stat.on_5xx(),
-            c => log::error!("unexpected code: {}", c),
+            c => log::warn!("unexpected HTTP code: {c}"),
         }
 
         self.requests_per_sock_left = self.requests_per_sock_left.saturating_sub(1);
@@ -263,6 +267,16 @@ where
     }
 
     #[inline]
+    async fn curr_sock(&mut self) -> Result<TcpStream, Error> {
+        let stream = match self.stream.take() {
+            Some(stream) => stream,
+            None => self.reconnect().await?,
+        };
+
+        Ok(stream)
+    }
+
+    #[inline]
     async fn perform_request(&mut self, stream: &mut TcpStream) -> Result<u16, Error> {
         let req = self.data.next();
         let mut resp = stream.sender.send_request(req.clone()).await?;
@@ -274,16 +288,6 @@ where
         }
 
         Ok(code)
-    }
-
-    #[inline]
-    async fn curr_sock(&mut self) -> Result<TcpStream, Error> {
-        let stream = match self.stream.take() {
-            Some(stream) => stream,
-            None => self.reconnect().await?,
-        };
-
-        Ok(stream)
     }
 
     #[inline]
