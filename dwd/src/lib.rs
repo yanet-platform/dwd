@@ -1,15 +1,16 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+pub mod api;
 pub mod cfg;
 pub mod cmd;
 pub mod engine;
 mod generator;
-mod histogram;
+pub mod histogram;
 pub mod logging;
 mod shaper;
 mod sockstat;
-mod stat;
+pub mod stat;
 mod ui;
 mod worker;
 

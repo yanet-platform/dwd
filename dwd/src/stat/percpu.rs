@@ -6,6 +6,7 @@ use std::{sync::Arc, time::Instant};
 
 use super::{CommonStat, HttpStat, RxStat, SocketStat, TxStat};
 use crate::{
+    api::{MetricsCollector, StatSource},
     histogram::{LogHistogram, PerCpuLogHistogram},
     stat::BurstTxStat,
 };
@@ -17,9 +18,7 @@ pub struct SharedGenerator {
 
 impl SharedGenerator {
     pub fn new() -> Self {
-        Self {
-            counter: Arc::new(AtomicU64::new(0)),
-        }
+        Self { counter: Arc::new(AtomicU64::new(0)) }
     }
 
     pub fn load(&self) -> u64 {
@@ -46,7 +45,10 @@ where
     B: Default,
 {
     pub fn new(stats: Vec<Arc<PerCpuStat<T, R, S, H, B>>>) -> Self {
-        Self { generator: SharedGenerator::new(), stats }
+        Self {
+            generator: SharedGenerator::new(),
+            stats,
+        }
     }
 
     pub fn generator(&self) -> SharedGenerator {
@@ -158,6 +160,47 @@ impl<T, R, S, H> BurstTxStat for Stat<T, R, S, H, BurstTxWorkerStat> {
     #[inline]
     fn num_bursts_tx(&self, idx: usize) -> u64 {
         self.stats.iter().map(|v| unsafe { *v.bursts_tx.hist[idx].get() }).sum()
+    }
+}
+
+// StatSource implementations for specific Stat type combinations.
+
+/// HTTP engine stat: has TX, RX, Socket, and HTTP stats with histogram.
+impl<B> StatSource for Stat<TxWorkerStat, RxWorkerStat, SockWorkerStat, HttpWorkerStat, B>
+where
+    B: Send + Sync,
+{
+    fn collect(&self, collector: &MetricsCollector) {
+        collector.update_common(self);
+        collector.update_tx(self);
+        collector.update_rx(self);
+        collector.update_http(self);
+        collector.update_socket(self);
+    }
+
+    fn histogram(&self) -> Option<LogHistogram> {
+        Some(self.hist())
+    }
+}
+
+/// UDP engine stat: has TX and Socket stats, no histogram.
+impl<H, B> StatSource for Stat<TxWorkerStat, (), SockWorkerStat, H, B>
+where
+    H: Send + Sync,
+    B: Send + Sync,
+{
+    fn collect(&self, collector: &MetricsCollector) {
+        collector.update_common(self);
+        collector.update_tx(self);
+        collector.update_socket(self);
+    }
+}
+
+/// DPDK engine stat: has TX stats only, no histogram.
+impl StatSource for Stat<TxWorkerStat, (), (), (), BurstTxWorkerStat> {
+    fn collect(&self, collector: &MetricsCollector) {
+        collector.update_common(self);
+        collector.update_tx(self);
     }
 }
 

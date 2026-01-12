@@ -34,6 +34,8 @@ use crate::{
 pub struct Config {
     pub mode: ModeConfig,
     pub generator_fn: BoxedGeneratorNew,
+    /// Address to expose API on.
+    pub api_addr: Option<SocketAddr>,
 }
 
 impl TryFrom<Cmd> for Config {
@@ -41,6 +43,7 @@ impl TryFrom<Cmd> for Config {
 
     fn try_from(v: Cmd) -> Result<Self, Self::Error> {
         let mode = v.mode.try_into()?;
+        let api_addr = v.api_addr;
         let generator_fn = {
             let path = v.generator.clone();
 
@@ -60,6 +63,7 @@ impl TryFrom<Cmd> for Config {
         let m = Self {
             mode,
             generator_fn: BoxedGeneratorNew(generator_fn),
+            api_addr,
         };
 
         Ok(m)

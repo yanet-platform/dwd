@@ -50,6 +50,18 @@ impl LogHistogram {
         Self { snapshot }
     }
 
+    /// Returns the raw snapshot of bucket counts.
+    #[inline]
+    pub fn snapshot(&self) -> &[u64] {
+        &self.snapshot
+    }
+
+    /// Returns the logarithmic factor used for bucket boundaries.
+    #[inline]
+    pub const fn factor() -> f64 {
+        FACTOR
+    }
+
     /// Calculates the quantile.
     ///
     /// Suppose we have the following histogram, in linear coordinates:

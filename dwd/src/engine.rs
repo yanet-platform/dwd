@@ -14,6 +14,7 @@ use tokio::sync::mpsc::{self, Receiver};
 #[cfg(feature = "dpdk")]
 use crate::worker::dpdk::DpdkEngine;
 use crate::{
+    api::{MetricsState, Server, StatSource},
     cfg::{Config, ModeConfig},
     engine::{
         http::{Engine as HttpEngine, EngineRaw as HttpEngineRaw},
@@ -40,6 +41,7 @@ trait Engine: Send {
     fn generator(&self) -> SharedGenerator;
     fn limits(&self) -> Vec<Arc<AtomicU64>>;
     fn ui(&self) -> (Ui, Receiver<GeneratorEvent>);
+    fn stat_source(&self) -> Arc<dyn StatSource>;
     fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error>;
 }
 
@@ -65,6 +67,10 @@ impl Engine for HttpEngine {
             .with_rx_timings(stat.clone());
 
         (ui, rx)
+    }
+
+    fn stat_source(&self) -> Arc<dyn StatSource> {
+        self.stat()
     }
 
     fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error> {
@@ -96,6 +102,10 @@ impl Engine for HttpEngineRaw {
         (ui, rx)
     }
 
+    fn stat_source(&self) -> Arc<dyn StatSource> {
+        self.stat()
+    }
+
     fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error> {
         Self::run(*self, future::pending(), is_running)
     }
@@ -120,6 +130,10 @@ impl Engine for UdpEngine {
             .with_sock(stat.clone());
 
         (ui, rx)
+    }
+
+    fn stat_source(&self) -> Arc<dyn StatSource> {
+        self.stat()
     }
 
     fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error> {
@@ -147,6 +161,10 @@ impl Engine for DpdkEngine {
             .with_burst_tx(stat.clone());
 
         (ui, rx)
+    }
+
+    fn stat_source(&self) -> Arc<dyn StatSource> {
+        self.stat()
     }
 
     fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error> {
@@ -179,6 +197,20 @@ impl Runtime {
         let limits = engine.limits();
         let generator = engine.generator();
         let (ui, rx) = engine.ui();
+        let stat_source = engine.stat_source();
+
+        // Start API server if configured.
+        let api_handle = if let Some(addr) = self.cfg.api_addr {
+            let metrics_state = Arc::new(MetricsState::new(stat_source));
+            let server = Server::new(addr, metrics_state);
+            Some(tokio::spawn(async move {
+                if let Err(e) = server.run().await {
+                    log::error!("API server error: {e}");
+                }
+            }))
+        } else {
+            None
+        };
 
         let engine = {
             let is_running = self.is_running.clone();
@@ -194,6 +226,11 @@ impl Runtime {
 
         ui.join().expect("no self join").unwrap();
         engine.join().expect("no self join")?;
+
+        // Abort API server when shutting down.
+        if let Some(handle) = api_handle {
+            handle.abort();
+        }
 
         Ok(())
     }
