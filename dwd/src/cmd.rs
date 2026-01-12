@@ -23,6 +23,12 @@ pub struct Cmd {
     /// Be verbose in terms of logging.
     #[clap(short, action = ArgAction::Count, global = true)]
     pub verbose: u8,
+    /// Address to expose API on.
+    ///
+    /// When specified, starts an HTTP server that exposes API that can be used
+    /// to observe the generator state and metrics.
+    #[clap(long, global = true, value_name = "IP:PORT")]
+    pub api_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, Parser)]
