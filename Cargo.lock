@@ -370,7 +370,7 @@ checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
 
 [[package]]
 name = "dwd"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "axum",
