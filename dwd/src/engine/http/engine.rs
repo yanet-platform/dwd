@@ -255,11 +255,11 @@ where
         }
 
         self.requests_per_sock_left = self.requests_per_sock_left.saturating_sub(1);
-        if self.requests_per_sock_left == 0 {
-            if self.requests_per_sock_left % 32 == 0 {
-                sock.stat.update();
-            }
-
+        if self.requests_per_sock_left % 32 == 0 {
+            sock.stat.update();
+        }
+        if self.requests_per_sock_left > 0 {
+            // Reuse the socket if we haven't reached the requests-per-socket limit.
             self.stream = Some(sock);
         } else {
             self.requests_per_sock_left = self.requests_per_sock_gen.next();
