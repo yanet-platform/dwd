@@ -77,8 +77,8 @@ pub struct HttpCmd {
     #[clap(short, long, default_value_t = std::thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN))]
     pub concurrency: NonZero<usize>,
     /// Path to the JSON payload file.        
-    #[clap(long, value_name = "PATH", required = true)]
-    pub payload_json: Option<PathBuf>,
+    #[clap(long, value_name = "PATH")]
+    pub payload_json: PathBuf,
     /// Set linger TCP option with specified value.
     #[clap(long)]
     pub tcp_linger: Option<u64>,
@@ -107,13 +107,7 @@ where
             tcp_no_delay,
         } = cmd;
 
-        let requests = {
-            if let Some(path) = payload_json {
-                JsonLineRecord::from_fs(path)?
-            } else {
-                todo!();
-            }
-        };
+        let requests = JsonLineRecord::from_fs(payload_json)?;
 
         let m = Self {
             addr,
