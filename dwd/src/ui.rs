@@ -1,4 +1,4 @@
-use core::{iter::repeat, ops::Deref, time::Duration};
+use core::{iter::repeat_n, ops::Deref, time::Duration};
 use std::{borrow::Cow, error::Error, sync::Arc, time::Instant};
 
 use crossterm::{
@@ -307,7 +307,7 @@ impl MetricListWidget {
             ));
         frame.render_widget(block, area);
 
-        let areas = Layout::vertical(repeat(Constraint::Length(1)).take(self.widgets.len()))
+        let areas = Layout::vertical(repeat_n(Constraint::Length(1), self.widgets.len()))
             .margin(1)
             .horizontal_margin(2)
             .split(area);
