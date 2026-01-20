@@ -1,0 +1,155 @@
+# Dockerfile for building DWD with DPDK 24.11 on Ubuntu 18.04
+# This produces a binary compatible with older systems (GLIBC 2.27+)
+#
+# Note: Ubuntu 18.04 has old packages, so we need to install newer versions
+# of meson, ninja, and clang from alternative sources.
+
+FROM ubuntu:18.04 AS builder
+
+ENV RUST_VERSION=1.87
+ENV DPDK_VERSION=24.11
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Update and install basic dependencies.
+RUN apt-get update -y && apt-get install -y \
+    curl \
+    tar \
+    xz-utils \
+    ca-certificates \
+    gnupg \
+    software-properties-common
+
+# Add LLVM repository for newer clang (LLVM 15).
+RUN curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add - && \
+    echo "deb http://apt.llvm.org/bionic/ llvm-toolchain-bionic-15 main" > /etc/apt/sources.list.d/llvm.list
+
+# Install Python 3.8 from deadsnakes PPA (needed for newer meson).
+RUN add-apt-repository -y ppa:deadsnakes/ppa
+
+RUN apt-get update -y
+
+# Install build dependencies.
+# - build-essential - gcc, g++, make.
+# - clang-15, libclang-15-dev - compiler and bindgen support.
+# - python3.8, python3.8-venv - for meson.
+# - pkg-config - helps DPDK to find dependencies.
+RUN apt-get install -y --no-install-recommends \
+    build-essential \
+    clang-15 \
+    libclang-15-dev \
+    lld-15 \
+    pkg-config \
+    python3.8 \
+    python3.8-venv \
+    python3.8-distutils
+
+# Create symlinks for clang.
+RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 100 && \
+    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 100 && \
+    update-alternatives --install /usr/bin/lld lld /usr/bin/lld-15 100
+
+# Install pip and meson/ninja via pip (Ubuntu 18.04's meson is too old for DPDK 24.11).
+RUN curl -fsSL https://bootstrap.pypa.io/pip/3.8/get-pip.py | python3.8 && \
+    python3.8 -m pip install meson ninja pyelftools
+
+# MLX5 dependencies.
+# Ubuntu 18.04 has very old rdma-core (v17), but DPDK 24.11 MLX5 needs v41+.
+# We'll build rdma-core from source to get proper DevX support.
+RUN apt-get install -y --no-install-recommends \
+    libnuma-dev \
+    libudev-dev \
+    libnl-3-dev \
+    libnl-route-3-dev \
+    cmake \
+    pandoc
+
+# Build rdma-core v50 from source for proper MLX5 support.
+# We'll bundle the shared libs with the binary.
+WORKDIR /build
+RUN curl -sL https://github.com/linux-rdma/rdma-core/releases/download/v50.0/rdma-core-50.0.tar.gz | tar xz
+WORKDIR /build/rdma-core-50.0
+RUN mkdir build && cd build && \
+    cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release \
+          -DNO_MAN_PAGES=1 -DNO_PYVERBS=1 .. && \
+    make -j$(nproc) && \
+    make install
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/rdma-core.conf && ldconfig
+WORKDIR /build
+RUN rm -rf rdma-core-50.0
+
+# Download and unpack DPDK.
+RUN mkdir -p /build/dpdk
+WORKDIR /build
+RUN curl -s -o dpdk-${DPDK_VERSION}.tar.xz https://fast.dpdk.org/rel/dpdk-${DPDK_VERSION}.tar.xz
+RUN tar -xvJf dpdk-${DPDK_VERSION}.tar.xz -C dpdk --strip-components=1
+
+# Build DPDK with static libraries.
+# Set PKG_CONFIG_PATH to find rdma-core we built.
+WORKDIR /build/dpdk
+RUN PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH \
+    CC=clang CXX=clang++ meson setup \
+    --prefix=/usr/local \
+    --libdir=lib64 \
+    -Ddefault_library=static \
+    -Ddisable_drivers=net/mlx4 \
+    -Ddisable_apps=* \
+    -Denable_apps= \
+    -Dtests=false \
+    build
+
+RUN ninja -C build
+RUN ninja -C build install
+
+# Update library paths for linker.
+RUN echo "/usr/local/lib64" > /etc/ld.so.conf.d/dpdk.conf && ldconfig
+
+WORKDIR /
+RUN rm -rf /build/dpdk /build/*.tar.xz
+
+# Install Rust.
+RUN curl -f -sSf https://sh.rustup.rs | bash -s -- -y --default-toolchain none
+RUN /root/.cargo/bin/rustup toolchain install $RUST_VERSION --profile minimal -c clippy -c rustfmt
+
+# Set LIBCLANG_PATH for bindgen.
+ENV LIBCLANG_PATH=/usr/lib/llvm-15/lib
+
+# Install cargo-deb for debian package building.
+RUN /root/.cargo/bin/cargo install cargo-deb
+
+# Copy source code.
+WORKDIR /src
+COPY . .
+
+# Verify versions.
+RUN clang --version
+RUN /root/.cargo/bin/cargo --version
+RUN meson --version
+
+# Build with DPDK support.
+# Set RPATH so the binary looks for libs in /opt/dwd/lib relative to itself.
+# Also enable tokio_unstable for LocalRuntime support.
+ENV RUSTFLAGS="--cfg tokio_unstable -C link-arg=-Wl,-rpath,/opt/dwd/lib"
+RUN /root/.cargo/bin/cargo build --release --features=dpdk
+
+# Run clippy.
+RUN /root/.cargo/bin/cargo clippy --features=dpdk -- -D warnings
+
+# Build debian package (standard, without bundled libs).
+RUN /root/.cargo/bin/cargo deb -p dwd --no-build
+
+# Create bundled deb package with rdma-core libs for older systems.
+# This package conflicts with and replaces the standard 'dwd' package.
+# Extract version from Cargo.toml to avoid hardcoding.
+RUN DWD_VERSION=$(grep '^version' /src/dwd/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/') && \
+    mkdir -p /src/dist/dwd-dpdk-bundle/opt/dwd/lib /src/dist/dwd-dpdk-bundle/opt/dwd/bin /src/dist/dwd-dpdk-bundle/usr/bin /src/dist/dwd-dpdk-bundle/DEBIAN && \
+    mkdir -p /src/dist/dwd-dpdk-bundle/opt/dwd/etc/libibverbs.d && \
+    cp /src/target/release/dwd /src/dist/dwd-dpdk-bundle/opt/dwd/bin/ && \
+    cp /usr/local/lib/libibverbs.so* /src/dist/dwd-dpdk-bundle/opt/dwd/lib/ && \
+    cp /usr/local/lib/libmlx5.so* /src/dist/dwd-dpdk-bundle/opt/dwd/lib/ && \
+    cp /usr/local/lib/libibverbs/*.so /src/dist/dwd-dpdk-bundle/opt/dwd/lib/ 2>/dev/null || true && \
+    cp /usr/local/etc/libibverbs.d/* /src/dist/dwd-dpdk-bundle/opt/dwd/etc/libibverbs.d/ 2>/dev/null || true && \
+    ln -s /opt/dwd/bin/dwd /src/dist/dwd-dpdk-bundle/usr/bin/dwd && \
+    printf "Package: dwd\nVersion: ${DWD_VERSION}\nSection: net\nPriority: optional\nArchitecture: amd64\nDepends: libnuma1\nProvides: dwd\nConflicts: dwd\nReplaces: dwd\nMaintainer: Evgeny Safronov <division494@gmail.com>\nDescription: DWD with bundled DPDK and rdma-core libs\n Includes libibverbs and libmlx5 for compatibility with older systems.\n" > /src/dist/dwd-dpdk-bundle/DEBIAN/control && \
+    dpkg-deb --build /src/dist/dwd-dpdk-bundle /src/dist/dwd_${DWD_VERSION}-dpdk_amd64.deb
+
