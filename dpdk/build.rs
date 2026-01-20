@@ -4,55 +4,37 @@ fn main() {
 
     use cc::Build;
 
-    /// Path where DPDK includes are located.
-    // const DPDK_INCLUDE_PATHS: &[&str] = &["/usr/local/include"];
-    const DPDK_INCLUDE_PATHS: &[&str] = &[
-        "/usr/include/dpdk",
-        "/usr/include/x86_64-linux-gnu/dpdk",
-        "/usr/share/dpdk/x86_64-sandybridge-linuxapp-gcc/include",
-    ];
+    // Path where DPDK 24.11 includes are located (installed via meson to /usr/local).
+    const DPDK_INCLUDE_PATHS: &[&str] = &["/usr/local/include"];
 
-    // const DPDK_LIBRARY_PATHS: &[&str] = &["/usr/local/lib64/dpdk/pmds-25.0"];
-    const DPDK_LIBRARY_PATHS: &[&str] = &["/usr/share/dpdk/x86_64-sandybridge-linuxapp-gcc"];
+    // Path where DPDK 24.11 static libraries are located.
+    // Note: DPDK 24.11 installs to lib64 by default, but some distros use lib/x86_64-linux-gnu.
+    const DPDK_LIBRARY_PATHS: &[&str] = &["/usr/local/lib64", "/usr/local/lib/x86_64-linux-gnu"];
 
-    /// DPDK core libraries to link with (static).
-    // const RTE_CORE_LIBS: &[&str] = &[
-    //     "rte_bus_auxiliary",
-    //     "rte_bus_pci",
-    //     "rte_cryptodev",
-    //     "rte_eal",
-    //     "rte_ethdev",
-    //     "rte_hash",
-    //     "rte_kvargs",
-    //     "rte_log",
-    //     "rte_mbuf",
-    //     "rte_mempool",
-    //     "rte_mempool_ring",
-    //     "rte_net",
-    //     "rte_pci",
-    //     "rte_rcu",
-    //     "rte_ring",
-    //     "rte_telemetry",
-    // ];
+    // DPDK 24.11 core libraries to link with (static).
     const RTE_CORE_LIBS: &[&str] = &[
+        "rte_bus_auxiliary",
         "rte_bus_pci",
         "rte_eal",
         "rte_ethdev",
+        "rte_hash",
         "rte_kvargs",
+        "rte_log",
         "rte_mbuf",
         "rte_mempool",
         "rte_mempool_ring",
         "rte_net",
         "rte_pci",
+        "rte_rcu",
         "rte_ring",
+        "rte_telemetry",
     ];
 
-    // PMD (poll-mode-driver) libraries dependency.
-    // const RTE_PMD_LIBS: &[&str] = &["rte_common_mlx5", "rte_crypto_mlx5", "rte_net_mlx5"];
-    const RTE_PMD_LIBS: &[&str] = &["rte_pmd_mlx5"];
+    // PMD (poll-mode-driver) libraries for MLX5 (DPDK 24.11 naming).
+    const RTE_PMD_LIBS: &[&str] = &["rte_common_mlx5", "rte_net_mlx5"];
 
     // Additional dependencies, which must be linked dynamically against, because
-    // of license.
+    // of GPL license (ibverbs/mlx5).
     const RTE_DEPS_LIBS: &[&str] = &["numa", "ibverbs", "mlx5"];
 
     println!("cargo:rerun-if-changed=src/ffi/wrapper.h");
@@ -60,7 +42,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=/usr/lib/x86_64-linux-gnu/");
     for path in DPDK_LIBRARY_PATHS {
-        println!("cargo:rustc-link-search={path}/lib");
+        println!("cargo:rustc-link-search={path}");
     }
 
     // https://stackoverflow.com/questions/1202494/why-doesnt-attribute-constructor-work-in-a-static-library
@@ -107,7 +89,7 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     bindings.write_to_file(out_dir.join("bindings.rs")).unwrap();
 
-    // Step 3: Compile a stub file so Rust can access `inline` functions in the
+    // Compile a stub file so Rust can access `inline` functions in the
     // headers that aren't compiled into the libraries.
     let mut builder: Build = cc::Build::new();
     builder.opt_level(3);

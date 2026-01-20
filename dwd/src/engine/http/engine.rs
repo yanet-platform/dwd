@@ -183,6 +183,7 @@ struct CoroWorker<B, D> {
 }
 
 impl<B, D> CoroWorker<B, D> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         addr: SocketAddr,
         bind: B,
@@ -255,7 +256,7 @@ where
         }
 
         self.requests_per_sock_left = self.requests_per_sock_left.saturating_sub(1);
-        if self.requests_per_sock_left % 32 == 0 {
+        if self.requests_per_sock_left.is_multiple_of(32) {
             sock.stat.update();
         }
         if self.requests_per_sock_left > 0 {
@@ -309,6 +310,7 @@ where
             stream.set_nodelay(self.tcp_no_delay)?;
         }
         if let Some(linger) = self.tcp_linger {
+            #[allow(deprecated)]
             stream.set_linger(Some(Duration::from_secs(linger)))?;
         }
         self.stat.on_sock_created();

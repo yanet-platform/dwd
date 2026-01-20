@@ -279,6 +279,7 @@ impl Runtime {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     fn run_ui(&self, ui: Ui) -> Result<JoinHandle<Result<(), Box<dyn core::error::Error + Send + Sync>>>, Error> {
         let is_running = self.is_running.clone();
 

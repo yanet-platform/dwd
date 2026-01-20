@@ -28,11 +28,15 @@ pub type WorkerStat = PerCpuStat<TxWorkerStat, (), (), (), BurstTxWorkerStat>;
 pub type EngineStat = Stat<TxWorkerStat, (), (), (), BurstTxWorkerStat>;
 
 const MBUFS_COUNT: u32 = 256 * 1024;
-const MBUF_SIZE: u32 = 10 * 1024;
 const MBUFS_BURST_SIZE: u16 = 32;
 const MTU: u16 = 9 * 1024;
 const PORT_RX_QUEUE_SIZE: u16 = 1024;
 const PORT_TX_QUEUE_SIZE: u16 = 1024;
+
+// Mbuf data room size: MTU + Ethernet header (14) + VLAN (4) + headroom (128).
+// For jumbo frames with MTU 9216, we need at least 9216 + 14 + 4 + 128 = 9362
+// bytes. Round up to 10 KB for alignment.
+const MBUF_DATA_ROOM_SIZE: u16 = 10 * 1024;
 
 pub type PciDeviceName = String;
 
@@ -53,13 +57,13 @@ pub enum Error {
     #[error("out of memory")]
     OutOfMemory,
     #[error("dpdk error: {0}")]
-    DpdkError(#[from] dpdk::error::Error),
+    Dpdk(#[from] dpdk::error::Error),
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    /// Core ID that is used as master.
-    master_lcore: CoreId,
+    /// Core ID that is used as main (DPDK 20+, renamed from master_lcore).
+    main_lcore: CoreId,
     /// Port settings, united by PCI device.
     ///
     /// The PCI device name is expected to be in format "domain:bus:devid.func".
@@ -70,14 +74,14 @@ pub struct Config {
 
 impl Config {
     /// Constructs a new `Config`.
-    pub const fn new(master_lcore: CoreId, ports: HashMap<PciDeviceName, PortConfig>, pcap_path: PathBuf) -> Self {
-        Self { master_lcore, ports, pcap_path }
+    pub const fn new(main_lcore: CoreId, ports: HashMap<PciDeviceName, PortConfig>, pcap_path: PathBuf) -> Self {
+        Self { main_lcore, ports, pcap_path }
     }
 
-    /// Returns the core ID that is used as master.
+    /// Returns the core ID that is used as main.
     #[inline]
-    pub fn master_lcore(&self) -> CoreId {
-        self.master_lcore
+    pub fn main_lcore(&self) -> CoreId {
+        self.main_lcore
     }
 
     /// Returns the iterator over CPU cores specified in this config.
@@ -101,7 +105,7 @@ impl Config {
     /// Constructs and returns the CPU core mask to be used in EAL.
     pub fn core_mask(&self) -> CoreMask {
         let mut mask = CoreMask::default();
-        mask.add(self.master_lcore);
+        mask.add(self.main_lcore);
         for id in self.cores() {
             mask.add(id);
         }
@@ -135,7 +139,7 @@ extern "C" fn run_worker(data: *mut core::ffi::c_void) -> i32 {
     let core_id = dpdk::rte_lcore_id();
 
     // Main thread.
-    if core_id == data.engine.cfg.master_lcore() {
+    if core_id == data.engine.cfg.main_lcore() {
         return 0;
     }
 
@@ -160,7 +164,7 @@ pub struct DpdkEngine {
     pps_limits: HashMap<CoreId, Arc<AtomicU64>>,
     /// Runtime statistics.
     stats: Arc<EngineStat>,
-    ///
+    /// Worker instances.
     workers: HashMap<CoreId, RteBox<Worker>>,
 }
 
@@ -195,10 +199,13 @@ impl DpdkEngine {
         m.load_pcap()?;
 
         if dpdk::ethdev::eth_dev_count() as usize != m.cfg.ports.len() {
-            return Err(Error::InvalidPortsCount(m.cfg.ports.len(), dpdk::ethdev::eth_dev_count() as usize).into());
+            return Err(Error::InvalidPortsCount(
+                m.cfg.ports.len(),
+                dpdk::ethdev::eth_dev_count() as usize,
+            ));
         }
         if dpdk::lcore::lcore_count() as usize != m.cfg.cores_count() + 1 {
-            return Err(Error::InvalidCoresCount.into());
+            return Err(Error::InvalidCoresCount);
         }
 
         Ok(m)
@@ -222,7 +229,7 @@ impl DpdkEngine {
             }
         }
 
-        // 6. Spawn threads.
+        // Spawn threads.
         let mut data = WorkerData {
             engine: &mut self,
             is_running: is_running.clone(),
@@ -232,14 +239,89 @@ impl DpdkEngine {
             dpdk::ffi::rte_eal_mp_remote_launch(
                 Some(run_worker),
                 &mut data as *mut WorkerData<'_> as *mut core::ffi::c_void,
-                // dpdk::ffi::rte_rmt_call_main_t::SKIP_MAIN,
-                dpdk::ffi::rte_rmt_call_master_t::SKIP_MASTER,
+                dpdk::ffi::rte_rmt_call_main_t::SKIP_MAIN,
             )
         };
 
-        // 7. Join.
+        // Join.
         unsafe { dpdk::ffi::rte_eal_mp_wait_lcore() };
 
+        // IMPORTANT: Proper shutdown sequence to avoid double-free in MLX5 driver.
+        //
+        // The issue is that mbufs are held by both the application (Worker.mbufs[])
+        // and the TX ring. When rte_eal_cleanup() calls mlx5_dev_close(), the driver
+        // tries to free mbufs from the ring, but they may still have elevated refcnt
+        // from our application's reuse pattern. We must:
+        // 1. Drain RX queues to return any pending mbufs.
+        // 2. Reset refcnt on our mbufs so driver can properly free them.
+        // 3. Stop ports.
+        // 4. Wait for DMA to complete.
+        // 5. Clear workers.
+        // 6. Call EAL cleanup.
+
+        // Step 1: Drain RX queues - read all pending packets and let them return to
+        // mempool.
+        log::debug!("draining RX queues");
+        for port_id in dpdk::ethdev::eth_dev_iter() {
+            // Get number of RX queues from config.
+            let mut dev_info: dpdk::ffi::rte_eth_dev_info = Default::default();
+            unsafe { dpdk::ffi::rte_eth_dev_info_get(port_id, &mut dev_info) };
+            let rx_queues = dev_info.nb_rx_queues;
+
+            for queue_id in 0..rx_queues {
+                let mut rx_mbufs: [*mut dpdk::ffi::rte_mbuf; 32] = [core::ptr::null_mut(); 32];
+                loop {
+                    let count = unsafe { dpdk::rte_eth_rx_burst(port_id, queue_id, rx_mbufs.as_mut_ptr(), 32) };
+                    if count == 0 {
+                        break;
+                    }
+                    // Mbufs with refcnt=1 will be returned to mempool automatically
+                    // when the driver processes them during close.
+                    log::trace!("drained {count} packets from port {port_id} queue {queue_id}");
+                }
+            }
+        }
+
+        // Step 2: Reset refcnt on all mbufs held by workers.
+        //
+        // We set high refcnt (16*1024+1024) during operation for zero-copy TX.
+        // Now we must reset it to 1 so that when the driver frees them during
+        // mlx5_dev_close -> rxq_free_elts, they properly return to the mempool.
+        log::debug!("resetting mbuf refcnt for {} workers", self.workers.len());
+        for (core_id, worker) in self.workers.iter_mut() {
+            for i in 0..worker.mbufs_count {
+                let mbuf = worker.mbufs[i];
+                if !mbuf.is_null() {
+                    unsafe { dpdk::rte_mbuf_refcnt_set(mbuf, 1) };
+                }
+            }
+            log::trace!("reset refcnt for {} mbufs on core {core_id}", worker.mbufs_count);
+        }
+
+        // Step 3: Stop all ports.
+        log::debug!("stopping ports");
+        for port_id in dpdk::ethdev::eth_dev_iter() {
+            log::debug!("stopping port {port_id}");
+            let rc = unsafe { dpdk::ffi::rte_eth_dev_stop(port_id) };
+            if rc != 0 {
+                log::warn!("rte_eth_dev_stop({port_id}) failed: {rc}");
+            }
+        }
+
+        // Step 4: Wait for DMA operations to complete.
+        //
+        // The MLX5 driver needs time to flush hardware queues.
+        log::debug!("waiting for DMA completion (100ms)");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Step 5: Clear workers.
+        //
+        // This drops Worker structs but does NOT free mbufs (they are raw pointers, not
+        // owned). The mempool still owns them.
+        log::debug!("clearing workers");
+        self.workers.clear();
+
+        log::debug!("cleaning up EAL");
         core::mem::drop(self.eal);
 
         Ok(())
@@ -248,13 +330,13 @@ impl DpdkEngine {
     fn init_eal(cfg: &Config) -> Result<Eal, Error> {
         let name = env!("CARGO_CRATE_NAME");
         let mut eal = EalBuilder::from_coremask(name.into(), cfg.core_mask())
-            .with_master_lcore(cfg.master_lcore())
+            .with_main_lcore(cfg.main_lcore())
             .with_proc_type("primary")
             .with_in_memory()
             .with_log_capture()?;
 
         for pci in cfg.ports.keys() {
-            eal = eal.with_pci_whitelist(pci);
+            eal = eal.with_allow(pci);
         }
 
         log::debug!("EAL: {:?}", eal);
@@ -269,14 +351,14 @@ impl DpdkEngine {
 
             let mempool_name = CString::new(format!("mp::{}", core)).unwrap();
 
-            log::debug!("constructing mempool of size {MBUFS_COUNT} ...");
+            log::debug!("constructing mempool of size {MBUFS_COUNT}, data room size {MBUF_DATA_ROOM_SIZE} ...");
             let mempool = unsafe {
                 dpdk::ffi::rte_pktmbuf_pool_create(
                     mempool_name.as_ptr(),
                     MBUFS_COUNT,
                     64,
                     0,
-                    dpdk::ffi::RTE_MBUF_DEFAULT_BUF_SIZE as u16,
+                    MBUF_DATA_ROOM_SIZE,
                     socket_id as i32,
                 )
             };
@@ -298,7 +380,7 @@ impl DpdkEngine {
         let mut ports = HashMap::new();
 
         for (pci, port) in &self.cfg.ports {
-            let port_id = dpdk::ethdev::rte_eth_dev_get_port_by_name(&pci)?;
+            let port_id = dpdk::ethdev::rte_eth_dev_get_port_by_name(pci)?;
             ports.insert(port_id, pci.clone());
 
             let socket_id = dpdk::rte_lcore_to_socket_id(CoreId::new(port_id));
@@ -327,23 +409,15 @@ impl DpdkEngine {
             };
             log::debug!("PCI: {pci}, neighbour MAC: {neighbour_mac}");
 
+            // DPDK 24.11: Use RTE_ETH_* prefixed constants.
             let mut port_cfg = dpdk::ffi::rte_eth_conf::default();
-            // port_cfg.rxmode.mq_mode = dpdk::ffi::rte_eth_rx_mq_mode::RTE_ETH_MQ_RX_RSS;
-            port_cfg.rxmode.mq_mode = dpdk::ffi::rte_eth_rx_mq_mode::ETH_MQ_RX_RSS;
-            // port_cfg.rx_adv_conf.rss_conf.rss_hf = 41868; //unsafe {
-            // dpdk::ffi::rte_eth_rss_ip().into() };
-            port_cfg.rx_adv_conf.rss_conf.rss_hf = dpdk::ffi::ETH_RSS_IP.into();
-            // port_cfg.rxmode.max_lro_pkt_size = core::cmp::min(
-            //     MBUF_SIZE - 2 * dpdk::ffi::RTE_PKTMBUF_HEADROOM,
-            //     dev_info.max_rx_pktlen - 2 * dpdk::ffi::RTE_PKTMBUF_HEADROOM,
-            // );
-            port_cfg.rxmode.max_rx_pkt_len = core::cmp::min(
-                MBUF_SIZE - 2 * dpdk::ffi::RTE_PKTMBUF_HEADROOM,
-                dev_info.max_rx_pktlen - 2 * dpdk::ffi::RTE_PKTMBUF_HEADROOM,
-            );
+            port_cfg.rxmode.mq_mode = dpdk::ffi::rte_eth_rx_mq_mode::RTE_ETH_MQ_RX_RSS;
+            // Enable SCATTER offload for jumbo frames support (required by MLX5).
+            port_cfg.rxmode.offloads = dpdk::ethdev::RTE_ETH_RX_OFFLOAD_SCATTER;
+            port_cfg.rx_adv_conf.rss_conf.rss_hf = dpdk::ethdev::RTE_ETH_RSS_IP;
 
             let mtu = MTU;
-            log::debug!("max_rx_pkt_len: {}, MTU: {mtu}", port_cfg.rxmode.max_lro_pkt_size);
+            log::debug!("MTU: {mtu}");
 
             let rx_queues_count = port.cores.len() as u16;
             let tx_queues_count = self.cfg.cores_count() as u16 + 1; // +1 for control thread.
@@ -351,13 +425,20 @@ impl DpdkEngine {
             log::debug!("rx_queues_count: {rx_queues_count}, tx_queues_count: {tx_queues_count}");
             let rc = unsafe { dpdk::ffi::rte_eth_dev_configure(port_id, rx_queues_count, tx_queues_count, &port_cfg) };
             if rc < 0 {
-                return Err(Error::DpdkError(rc.into()));
+                return Err(Error::Dpdk(rc.into()));
             }
 
-            let rc = unsafe { dpdk::ffi::rte_eth_dev_set_mtu(port_id, mtu) };
-            if rc != 0 {
-                return Err(Error::DpdkError(rc.into()));
-            }
+            // NOTE: MTU will be set after queue setup, before port start.
+            // Setting MTU here breaks rx_desc_lim on MLX5 in DPDK 24.11.
+
+            // DPDK 24.11 MLX5 driver reports bogus rx_desc_lim.nb_max=1 on older rdma-core.
+            // rte_eth_dev_adjust_nb_rx_tx_desc will return 1, which is useless.
+            // We must use reasonable defaults and hope the driver accepts them.
+            // The driver internally adjusts TX queue sizes (see logs about
+            // MLX5_TX_COMP_THRESH).
+            let nb_rx_desc = PORT_RX_QUEUE_SIZE;
+            let nb_tx_desc = PORT_TX_QUEUE_SIZE;
+            log::debug!("using nb_rx_desc: {nb_rx_desc}, nb_tx_desc: {nb_tx_desc}");
 
             // Init queues.
             for (queue_id, core_id) in port.cores.iter().enumerate() {
@@ -368,14 +449,14 @@ impl DpdkEngine {
                     dpdk::ffi::rte_eth_rx_queue_setup(
                         port_id,
                         queue_id,
-                        PORT_RX_QUEUE_SIZE,
+                        nb_rx_desc,
                         dpdk::ffi::rte_eth_dev_socket_id(port_id) as u32,
                         core::ptr::null(),
                         worker.mempool,
                     )
                 };
                 if rc < 0 {
-                    return Err(Error::DpdkError(rc.into()));
+                    return Err(Error::Dpdk(rc.into()));
                 }
 
                 worker.port_id = port_id;
@@ -389,14 +470,21 @@ impl DpdkEngine {
                     dpdk::ffi::rte_eth_tx_queue_setup(
                         port_id,
                         queue_id,
-                        PORT_TX_QUEUE_SIZE,
+                        nb_tx_desc,
                         dpdk::ffi::rte_eth_dev_socket_id(port_id) as u32,
                         core::ptr::null(),
                     )
                 };
                 if rc < 0 {
-                    return Err(Error::DpdkError(rc.into()));
+                    return Err(Error::Dpdk(rc.into()));
                 }
+            }
+
+            // Set MTU after queue setup (before port start).
+            // Setting it earlier breaks rx_desc_lim on MLX5 in DPDK 24.11.
+            let rc = unsafe { dpdk::ffi::rte_eth_dev_set_mtu(port_id, mtu) };
+            if rc != 0 {
+                log::warn!("failed to set MTU to {mtu}: {rc}");
             }
         }
 
@@ -414,11 +502,10 @@ impl DpdkEngine {
         let mut packets_count = 0;
         let cores: Vec<CoreId> = self.cfg.cores().collect();
         for (idx, block) in pcap.blocks.iter().enumerate() {
-            let mut d = Vec::with_capacity(block.caplen as usize);
-            d.resize(block.caplen as usize, 0);
+            let mut d = vec![0u8; block.caplen as usize];
             d.copy_from_slice(block.data);
             let _p = MutableEthernetPacket::new(&mut d).unwrap();
-            // todo: fix L2 headers.
+            // TODO: fix L2 headers.
 
             let worker = self.workers.get_mut(&cores[idx % cores.len()]).unwrap();
             let mbuf = unsafe { dpdk::rte_pktmbuf_alloc(worker.mempool) };
@@ -480,7 +567,7 @@ impl Worker {
 
     pub fn run(&mut self, is_running: Arc<AtomicBool>) {
         while is_running.load(Ordering::Relaxed) {
-            // todo: stat.
+            // TODO: stat.
             let _rx_size = unsafe {
                 dpdk::rte_eth_rx_burst(
                     self.port_id,
@@ -515,8 +602,7 @@ impl Worker {
                 if tx_size > 0 {
                     let mut size = 0u64;
                     for mbuf in &self.mbufs[self.packets_count_tx % self.mbufs_count..][..tx_size as usize] {
-                        // size += unsafe { (**mbuf).__bindgen_anon_2.__bindgen_anon_1.pkt_len } as u64;
-                        size += unsafe { (**mbuf).pkt_len } as u64;
+                        size += unsafe { dpdk::rte_pktmbuf_pkt_len(*mbuf) } as u64;
                     }
 
                     self.packets_count_tx += tx_size as usize;
@@ -584,7 +670,7 @@ mod nl {
                                 if let NeighbourAttribute::LinkLocalAddress(addr) = nla {
                                     if addr.len() == 6 {
                                         let mut buf = [0u8; 6];
-                                        buf.copy_from_slice(&addr);
+                                        buf.copy_from_slice(addr);
                                         out.push(MacAddr::from(buf));
                                     }
                                 };

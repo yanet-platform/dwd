@@ -18,6 +18,11 @@ pub mod ffi {
     #![allow(non_camel_case_types)]
     #![allow(non_snake_case)]
     #![allow(unused)]
+    #![allow(clippy::missing_safety_doc)]
+    #![allow(clippy::useless_transmute)]
+    #![allow(clippy::too_many_arguments)]
+    #![allow(clippy::unnecessary_cast)]
+    #![allow(clippy::ptr_offset_with_cast)]
 
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
@@ -53,21 +58,41 @@ unsafe fn rte_errno() -> core::ffi::c_int {
     _rte_errno()
 }
 
+/// Allocates a packet mbuf from the mempool.
+///
+/// # Safety
+///
+/// The `mp` pointer must point to a valid, initialized mempool.
 #[inline]
 pub unsafe fn rte_pktmbuf_alloc(mp: *mut ffi::rte_mempool) -> *mut ffi::rte_mbuf {
     _rte_pktmbuf_alloc(mp)
 }
 
+/// Appends data to the end of the mbuf.
+///
+/// # Safety
+///
+/// The `mbuf` pointer must point to a valid, initialized mbuf with sufficient tailroom.
 #[inline]
 pub unsafe fn rte_pktmbuf_append(mbuf: *mut ffi::rte_mbuf, len: core::ffi::c_ushort) -> *mut core::ffi::c_char {
     _rte_pktmbuf_append(mbuf, len)
 }
 
+/// Sends a burst of packets on an Ethernet device.
+///
+/// # Safety
+///
+/// The `tx_pkts` must point to a valid array of mbuf pointers with at least `nb_pkts` elements.
 #[inline]
 pub unsafe fn rte_eth_tx_burst(port_id: u16, queue_id: u16, tx_pkts: *mut *mut ffi::rte_mbuf, nb_pkts: u16) -> u16 {
     _rte_eth_tx_burst(port_id, queue_id, tx_pkts, nb_pkts)
 }
 
+/// Receives a burst of packets from an Ethernet device.
+///
+/// # Safety
+///
+/// The `rx_pkts` must point to a valid array of mbuf pointers with at least `nb_pkts` elements.
 #[inline]
 pub unsafe fn rte_eth_rx_burst(port_id: u16, queue_id: u16, rx_pkts: *mut *mut ffi::rte_mbuf, nb_pkts: u16) -> u16 {
     _rte_eth_rx_burst(port_id, queue_id, rx_pkts, nb_pkts)
@@ -79,7 +104,35 @@ pub fn rte_lcore_id() -> CoreId {
     CoreId::new(id)
 }
 
+/// Sets the reference count of an mbuf.
+///
+/// # Safety
+///
+/// The `mbuf` pointer must point to a valid, initialized mbuf.
 #[inline]
 pub unsafe fn rte_mbuf_refcnt_set(mbuf: *mut ffi::rte_mbuf, new_value: u16) {
     _rte_mbuf_refcnt_set(mbuf, new_value);
+}
+
+/// Returns the packet length from an mbuf.
+///
+/// In DPDK 24.11, the `pkt_len` field moved into a nested union structure.
+/// This function provides a stable accessor regardless of DPDK version.
+///
+/// # Safety
+///
+/// The `mbuf` pointer must point to a valid, initialized mbuf.
+#[inline]
+pub unsafe fn rte_pktmbuf_pkt_len(mbuf: *const ffi::rte_mbuf) -> u32 {
+    (*mbuf).__bindgen_anon_2.__bindgen_anon_1.pkt_len
+}
+
+/// Returns the data length from an mbuf.
+///
+/// # Safety
+///
+/// The `mbuf` pointer must point to a valid, initialized mbuf.
+#[inline]
+pub unsafe fn rte_pktmbuf_data_len(mbuf: *const ffi::rte_mbuf) -> u16 {
+    (*mbuf).__bindgen_anon_2.__bindgen_anon_1.data_len
 }

@@ -1,6 +1,6 @@
 [package]
 name = "dwd"
-version = "0.5.4"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.87"
 publish = true
@@ -58,3 +58,13 @@ netlink-sys = { version = "0.8" }
 
 [features]
 dpdk = ["dep:dpdk", "dep:thiserror", "dep:pcap-parser", "dep:etherparse"]
+
+[package.metadata.deb]
+maintainer = "Evgeny Safronov <division494@gmail.com>"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/dwd", "usr/bin/", "755"],
+    ["etc/dwd/*", "etc/dwd/", "644"],
+]
+depends = "libnuma1, libibverbs1, libmlx5-1"

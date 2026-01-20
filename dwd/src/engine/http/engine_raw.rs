@@ -143,6 +143,7 @@ struct CoroWorker<B, D> {
 }
 
 impl<B, D> CoroWorker<B, D> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         addr: SocketAddr,
         bind: B,
@@ -269,6 +270,7 @@ where
             stream.set_nodelay(self.tcp_no_delay)?;
         }
         if let Some(linger) = self.tcp_linger {
+            #[allow(deprecated)]
             stream.set_linger(Some(Duration::from_secs(linger)))?;
         }
         self.stat.on_sock_created();

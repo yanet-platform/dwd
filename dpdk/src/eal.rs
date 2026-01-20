@@ -1,5 +1,4 @@
 use core::ptr::NonNull;
-
 use std::ffi::CString;
 
 use crate::{
@@ -10,7 +9,6 @@ use crate::{
 
 /// EAL (environment abstraction layer) builder.
 ///
-/// https://doc.dpdk.org/guides-17.11/testpmd_app_ug/run_app.html
 /// https://doc.dpdk.org/guides/linux_gsg/build_sample_apps.html#running-a-sample-application
 #[derive(Debug)]
 pub struct EalBuilder {
@@ -25,7 +23,7 @@ impl EalBuilder {
     }
 
     /// Constructs a new EAL builder from the given application name and the
-    /// bitmask of the cores to run on..
+    /// bitmask of the cores to run on.
     pub fn from_coremask(name: String, mask: CoreMask) -> Self {
         Self::new()
             .with_string(name)
@@ -33,14 +31,19 @@ impl EalBuilder {
             .with_string(format!("0x{:x}", mask.as_u128()))
     }
 
-    /// Core ID that is used as master.
-    pub fn with_master_lcore(self, id: CoreId) -> Self {
-        self.with_string(format!("--master-lcore={}", id))
+    /// Core ID that is used as main (DPDK 20+, replaces master-lcore).
+    pub fn with_main_lcore(self, id: CoreId) -> Self {
+        self.with_string(format!("--main-lcore={}", id))
     }
 
-    /// Add a PCI device in white list.
-    pub fn with_pci_whitelist(self, pci: &str) -> Self {
-        self.with_string(format!("--pci-whitelist={}", pci))
+    /// Add a PCI device to the allow list (DPDK 20+, replaces pci-whitelist).
+    ///
+    /// For MLX5 devices, adds devargs to disable MPRQ (Multi-Packet RQ) which
+    /// can cause issues with descriptor limits in DPDK 24.11.
+    pub fn with_allow(self, pci: &str) -> Self {
+        // Add MLX5 devargs: mprq_en=0 disables Multi-Packet RQ.
+        let pci_with_devargs = format!("{},mprq_en=0,rxq_cqe_comp_en=0", pci);
+        self.with_string("-a".into()).with_string(pci_with_devargs)
     }
 
     /// Set the type of the current process.
@@ -106,7 +109,7 @@ unsafe impl Send for EalLoggingContext {}
 
 #[derive(Debug)]
 pub struct Eal {
-    _ctx: Option<EalLoggingContext>,
+    ctx: Option<EalLoggingContext>,
 }
 
 impl Eal {
@@ -121,12 +124,19 @@ impl Eal {
             return Err(Error::from_errno());
         }
 
-        Ok(Self { _ctx: ctx })
+        Ok(Self { ctx })
     }
 }
 
 impl Drop for Eal {
     fn drop(&mut self) {
+        // IMPORTANT: drop logging context FIRST, while DPDK is still alive.
+        //
+        // The file handle was created by fopencookie() and registered with DPDK via
+        // rte_openlog_stream(). We must close it before rte_eal_cleanup() because
+        // cleanup may invalidate internal state that the log stream uses.
+        drop(self.ctx.take());
+
         unsafe { ffi::rte_eal_cleanup() };
     }
 }
