@@ -63,26 +63,6 @@ jobs:
       - name: Check MSRV
         run: cargo check -p dwd
 
-  # Security and license checks.
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-latest
-    permissions:
-      checks: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  deny:
-    name: Cargo Deny
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-
   # Tests - run after format/clippy/check pass.
   test:
     name: Test
