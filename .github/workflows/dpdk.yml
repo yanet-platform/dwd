@@ -1,0 +1,67 @@
+name: DPDK Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Cancel previous runs when a new commit is pushed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dpdk-build:
+    name: Build with DPDK 24.11
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image with DPDK
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: dwd:dpdk-build
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract artifacts from Docker image
+        run: |
+          # Create container from image.
+          CONTAINER_ID=$(docker create dwd:dpdk-build)
+          
+          # Create output directory.
+          mkdir -p dist
+          
+          # Copy binary and debian packages from container.
+          docker cp $CONTAINER_ID:/src/target/release/dwd dist/dwd-dpdk
+          docker cp $CONTAINER_ID:/src/target/debian/. dist/
+          
+          # Cleanup.
+          docker rm $CONTAINER_ID
+          
+          # List artifacts.
+          ls -la dist/
+
+      - name: Upload DPDK binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwd-dpdk-linux-x86_64
+          path: dist/dwd-dpdk
+          if-no-files-found: error
+
+      - name: Upload debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwd-debian-package
+          path: dist/*.deb
+          if-no-files-found: error

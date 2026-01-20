@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build release binary without DPDK.
+  build-binary:
+    name: Build Binary (no DPDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release
+        run: cargo build -p dwd --release
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwd-linux-x86_64
+          path: target/release/dwd
+          if-no-files-found: error
+
+  # Build DPDK-enabled binary and debian package (Ubuntu 24.04, GLIBC 2.39).
+  build-dpdk:
+    name: Build with DPDK (Ubuntu 24.04)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image with DPDK
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: dwd:release-build
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract artifacts from Docker image
+        run: |
+          # Create container from image.
+          CONTAINER_ID=$(docker create dwd:release-build)
+          
+          # Create output directory.
+          mkdir -p dist
+          
+          # Copy binary and debian packages from container.
+          docker cp $CONTAINER_ID:/src/target/release/dwd dist/dwd-dpdk
+          docker cp $CONTAINER_ID:/src/target/debian/. dist/
+          
+          # Cleanup.
+          docker rm $CONTAINER_ID
+          
+          # List artifacts.
+          ls -la dist/
+
+      - name: Upload DPDK binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwd-dpdk-linux-x86_64
+          path: dist/dwd-dpdk
+          if-no-files-found: error
+
+      - name: Upload debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwd-debian-package
+          path: dist/*.deb
+          if-no-files-found: error
+
+  # Build DPDK-enabled binary for Ubuntu 18.04 (GLIBC 2.27, max compatibility).
+  build-dpdk-compat:
+    name: Build with DPDK (Ubuntu 18.04 compat)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image with DPDK (Ubuntu 18.04)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.ubuntu18
+          push: false
+          tags: dwd:release-build-compat
+          load: true
+          cache-from: type=gha,scope=ubuntu18
+          cache-to: type=gha,mode=max,scope=ubuntu18
+
+      - name: Extract artifacts from Docker image
+        run: |
+          # Create container from image.
+          CONTAINER_ID=$(docker create dwd:release-build-compat)
+          
+          # Create output directory.
+          mkdir -p dist
+          
+          # Copy binary from container.
+          docker cp $CONTAINER_ID:/src/target/release/dwd dist/dwd-dpdk-compat
+          
+          # Copy bundled debian package (with rdma-core libs) from /src/dist/.
+          docker cp $CONTAINER_ID:/src/dist/. dist/
+          
+          # Cleanup.
+          docker rm $CONTAINER_ID
+          
+          # List artifacts.
+          ls -la dist/
+
+      - name: Upload DPDK binary (compat)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwd-dpdk-linux-x86_64-compat
+          path: dist/dwd-dpdk-compat
+          if-no-files-found: error
+
+      - name: Upload debian package (compat)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwd-debian-package-compat
+          path: dist/*.deb
+          if-no-files-found: error
+
+  # Create GitHub release with all artifacts.
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-binary, build-dpdk, build-dpdk-compat]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          
+          # Regular binary (no DPDK).
+          cp artifacts/dwd-linux-x86_64/dwd release/dwd-linux-x86_64
+          
+          # DPDK binary (Ubuntu 24.04, GLIBC 2.39).
+          cp artifacts/dwd-dpdk-linux-x86_64/dwd-dpdk release/dwd-dpdk-linux-x86_64
+          
+          # DPDK binary (Ubuntu 18.04 compat, GLIBC 2.27).
+          cp artifacts/dwd-dpdk-linux-x86_64-compat/dwd-dpdk-compat release/dwd-dpdk-linux-x86_64-compat
+          
+          # Debian packages.
+          cp artifacts/dwd-debian-package/*.deb release/
+          cp artifacts/dwd-debian-package-compat/*.deb release/
+          
+          # Create checksums.
+          cd release
+          sha256sum * > SHA256SUMS
+          
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release/*
