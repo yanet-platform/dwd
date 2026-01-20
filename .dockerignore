@@ -1,0 +1,23 @@
+# Build artifacts
+target/
+.deploy/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Documentation (not needed for build)
+docs/
+
+# Local development
+.env
+.env.local
+*.log
+
