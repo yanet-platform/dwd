@@ -11,14 +11,14 @@ use crate::{
     stat::BurstTxStat,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SharedGenerator {
     counter: Arc<AtomicU64>,
 }
 
 impl SharedGenerator {
     pub fn new() -> Self {
-        Self { counter: Arc::new(AtomicU64::new(0)) }
+        Self::default()
     }
 
     pub fn load(&self) -> u64 {
@@ -30,10 +30,13 @@ impl SharedGenerator {
     }
 }
 
+/// Per-CPU statistics collection type alias.
+pub type StatVec<T, R, S, H, B> = Vec<Arc<PerCpuStat<T, R, S, H, B>>>;
+
 #[derive(Debug)]
 pub struct Stat<T, R, S, H, B> {
     generator: SharedGenerator,
-    pub stats: Vec<Arc<PerCpuStat<T, R, S, H, B>>>,
+    pub stats: StatVec<T, R, S, H, B>,
 }
 
 impl<T, R, S, H, B> Stat<T, R, S, H, B>
@@ -44,7 +47,7 @@ where
     H: Default,
     B: Default,
 {
-    pub fn new(stats: Vec<Arc<PerCpuStat<T, R, S, H, B>>>) -> Self {
+    pub fn new(stats: StatVec<T, R, S, H, B>) -> Self {
         Self {
             generator: SharedGenerator::new(),
             stats,
