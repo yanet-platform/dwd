@@ -92,6 +92,7 @@ RUN PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH \
     --prefix=/usr/local \
     --libdir=lib64 \
     -Ddefault_library=static \
+    -Dmachine=haswell \
     -Ddisable_drivers=net/mlx4 \
     -Ddisable_apps=* \
     -Denable_apps= \

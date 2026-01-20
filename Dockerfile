@@ -47,6 +47,7 @@ RUN meson setup \
     --prefix=/usr/local \
     --libdir=lib64 \
     -Ddefault_library=static \
+    -Dmachine=haswell \
     -Ddisable_drivers=net/mlx4 \
     -Ddisable_apps=* \
     -Denable_apps= \
