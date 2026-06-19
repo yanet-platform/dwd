@@ -15,3 +15,5 @@ prost = "0.14"
 
 [build-dependencies]
 tonic-prost-build = "0.14"
+# Vendored `protoc` so the build needs no system protobuf-compiler (CI, Docker).
+protoc-bin-vendored = "3"
