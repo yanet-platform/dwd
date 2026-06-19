@@ -1,13 +1,23 @@
 use core::{error::Error, net::SocketAddr, num::NonZero, time::Duration};
-use std::path::PathBuf;
+use std::{
+    net::{IpAddr, Ipv6Addr},
+    path::PathBuf,
+};
 
 use clap::{ArgAction, Parser};
-use pnet::ipnetwork::IpNetwork;
-
-use crate::engine::{
-    http::{payload::jsonline::JsonLineRecord, Config as HttpConfig},
-    udp::Config as UdpConfig,
+#[cfg(feature = "dpdk")]
+use dwd_core::{
+    cfg::DpdkConfig,
+    worker::dpdk::{Config as DpdkWorkerConfig, CoreId, PciDeviceName, PortConfig},
 };
+use dwd_core::{
+    cfg::{ModeConfig, NativeLoadConfig},
+    engine::{
+        http::{payload::jsonline::JsonLineRecord, Config as HttpConfig},
+        udp::Config as UdpConfig,
+    },
+};
+use pnet::ipnetwork::IpNetwork;
 
 /// The traffic generator we deserve.
 #[derive(Debug, Clone, Parser)]
@@ -55,6 +65,21 @@ pub enum ModeCmd {
     Dpdk(DpdkCmd),
 }
 
+impl ModeCmd {
+    /// Resolves the selected mode into its core configuration.
+    pub fn into_config(self) -> Result<ModeConfig, Box<dyn Error>> {
+        let m = match self {
+            ModeCmd::Http(v) => ModeConfig::Http(v.into_config()?),
+            ModeCmd::HttpRaw(v) => ModeConfig::HttpRaw(v.cmd.into_config()?),
+            ModeCmd::Udp(v) => ModeConfig::Udp(v.into_config()?),
+            #[cfg(feature = "dpdk")]
+            ModeCmd::Dpdk(v) => ModeConfig::Dpdk(v.into_config()?),
+        };
+
+        Ok(m)
+    }
+}
+
 #[derive(Debug, Clone, Parser)]
 pub struct HttpRawCmd {
     #[clap(flatten)]
@@ -73,10 +98,10 @@ pub struct HttpCmd {
     ///
     /// This also limits the maximum concurrent requests in flight. To achieve
     /// better runtime characteristics this value should be the multiple of
-    /// the number of threads.    
+    /// the number of threads.
     #[clap(short, long, default_value_t = std::thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN))]
     pub concurrency: NonZero<usize>,
-    /// Path to the JSON payload file.        
+    /// Path to the JSON payload file.
     #[clap(long, value_name = "PATH")]
     pub payload_json: PathBuf,
     /// Set linger TCP option with specified value.
@@ -90,13 +115,12 @@ pub struct HttpCmd {
     pub timeout: f64,
 }
 
-impl<T> TryFrom<HttpCmd> for HttpConfig<T>
-where
-    T: TryFrom<JsonLineRecord, Error = Box<dyn Error>>,
-{
-    type Error = Box<dyn Error>;
-
-    fn try_from(cmd: HttpCmd) -> Result<Self, Self::Error> {
+impl HttpCmd {
+    /// Loads the payloads and resolves this command into an HTTP engine config.
+    pub fn into_config<T>(self) -> Result<HttpConfig<T>, Box<dyn Error>>
+    where
+        T: TryFrom<JsonLineRecord, Error = Box<dyn Error>>,
+    {
         let HttpCmd {
             addr,
             native,
@@ -105,21 +129,19 @@ where
             timeout,
             tcp_linger,
             tcp_no_delay,
-        } = cmd;
+        } = self;
 
         let requests = JsonLineRecord::from_fs(payload_json)?;
 
-        let m = Self {
+        Ok(HttpConfig {
             addr,
-            native: native.try_into()?,
+            native: native.into_config()?,
             concurrency,
             timeout: Duration::try_from_secs_f64(timeout)?,
             tcp_linger,
             tcp_no_delay,
             requests,
-        };
-
-        Ok(m)
+        })
     }
 }
 
@@ -133,17 +155,12 @@ pub struct UdpCmd {
     pub native: NativeLoadCmd,
 }
 
-impl TryFrom<UdpCmd> for UdpConfig {
-    type Error = Box<dyn Error>;
+impl UdpCmd {
+    /// Resolves this command into a UDP engine config.
+    pub fn into_config(self) -> Result<UdpConfig, Box<dyn Error>> {
+        let UdpCmd { addr, native } = self;
 
-    fn try_from(v: UdpCmd) -> Result<Self, Self::Error> {
-        let UdpCmd { addr, native } = v;
-
-        let native = native.try_into()?;
-
-        let m = Self { addr, native };
-
-        Ok(m)
+        Ok(UdpConfig { addr, native: native.into_config()? })
     }
 }
 
@@ -176,6 +193,49 @@ pub struct NativeLoadCmd {
     pub bind_network: Option<IpNetwork>,
 }
 
+impl NativeLoadCmd {
+    /// Resolves bind addresses (scanning interfaces if `--bind-network` is given)
+    /// into a native workload config.
+    pub fn into_config(self) -> Result<NativeLoadConfig, Box<dyn Error>> {
+        let NativeLoadCmd {
+            threads,
+            requests_per_socket,
+            requests_per_socket_deviation,
+            bind_network,
+        } = self;
+
+        let mut bind_endpoints = Vec::new();
+        match bind_network {
+            Some(net) => {
+                for link in pnet::datalink::interfaces() {
+                    if !link.is_up() || link.is_loopback() || link.ips.is_empty() {
+                        continue;
+                    }
+
+                    bind_endpoints.extend(
+                        link.ips
+                            .into_iter()
+                            .filter(|v| net.contains(v.ip()))
+                            .map(|v| SocketAddr::new(v.ip(), 0)),
+                    );
+                }
+            }
+            None => {
+                bind_endpoints.push(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0));
+            }
+        }
+
+        log::debug!("bind endpoints: {:?}", bind_endpoints);
+
+        Ok(NativeLoadConfig::new(
+            threads,
+            requests_per_socket,
+            requests_per_socket_deviation,
+            bind_endpoints,
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Parser)]
 pub struct DpdkCmd {
     /// Path to the DPDK configuration file in YAML format.
@@ -187,4 +247,29 @@ pub struct DpdkCmd {
     /// infinitely until profile exhaustion.
     #[clap(long, required = true)]
     pub pcap_path: PathBuf,
+}
+
+#[cfg(feature = "dpdk")]
+impl DpdkCmd {
+    /// Parses the DPDK YAML config and resolves this command into a DPDK config.
+    pub fn into_config(self) -> Result<DpdkConfig, Box<dyn Error>> {
+        use std::{collections::HashMap, fs};
+
+        use serde::Deserialize;
+
+        #[derive(Deserialize)]
+        struct Cfg {
+            master_lcore: CoreId,
+            ports: HashMap<PciDeviceName, PortConfig>,
+        }
+
+        let data = fs::read(&self.dpdk_path)?;
+        let cfg: Cfg = serde_yaml::from_slice(&data)?;
+
+        Ok(DpdkConfig::new(DpdkWorkerConfig::new(
+            cfg.master_lcore,
+            cfg.ports,
+            self.pcap_path,
+        )))
+    }
 }

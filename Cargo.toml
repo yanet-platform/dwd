@@ -1,7 +1,12 @@
 [workspace]
 resolver = "2"
 
-members = ["dwd"]
+members = ["dwd", "dwd-core", "dwd-proto"]
+# The DPDK FFI crate lives inside the workspace dir but is built only when the
+# `dpdk` feature is enabled (it needs DPDK 24.11 headers). Excluding it keeps it
+# out of the default workspace build so `cargo check`/rust-analyzer don't try to
+# compile it without DPDK installed.
+exclude = ["dpdk"]
 
 [profile.release]
 panic = "abort"

@@ -1,6 +1,5 @@
 FROM ubuntu:24.04 AS builder
 
-ENV RUST_VERSION=1.87
 ENV DPDK_VERSION=24.11
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -63,7 +62,9 @@ RUN echo "/usr/local/lib64" > /etc/ld.so.conf.d/dpdk.conf && ldconfig
 WORKDIR /
 RUN rm -rf /build/dpdk /build/*.tar.xz
 
-# Install Rust.
+# Install Rust. Kept after the DPDK build so bumping the toolchain doesn't bust
+# the (slow) DPDK source-build cache layers above.
+ENV RUST_VERSION=1.96
 RUN curl -f -sSf https://sh.rustup.rs | bash -s -- -y --default-toolchain none
 RUN /root/.cargo/bin/rustup toolchain install $RUST_VERSION --profile minimal -c clippy -c rustfmt
 

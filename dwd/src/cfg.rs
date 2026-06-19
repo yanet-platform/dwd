@@ -1,40 +1,26 @@
-use core::{
-    error::Error,
-    fmt::{self, Debug, Formatter},
-    net::SocketAddr,
-    num::NonZero,
-    time::Duration,
-};
-use std::{
-    net::{IpAddr, Ipv6Addr},
-    sync::Arc,
-};
+//! CLI-facing application config.
+//!
+//! Builds the core [`ModeConfig`] and the generator factory from the parsed clap
+//! [`Cmd`]. The heavy config types live in [`dwd_core::cfg`]; this is just the
+//! CLI → core bridge plus the top-level [`Config`] the orchestrator consumes.
 
-use bytes::Bytes;
-use http::Request;
-use http_body_util::Empty;
-#[cfg(feature = "dpdk")]
-use {
-    crate::{
-        cmd::DpdkCmd,
-        worker::dpdk::{Config as DpdkWorkerConfig, CoreId, PciDeviceName, PortConfig},
-    },
-    serde::Deserialize,
-    std::{collections::HashMap, fs},
-};
+use core::{error::Error, net::SocketAddr, time::Duration};
 
-use crate::{
-    cmd::{Cmd, ModeCmd, NativeLoadCmd},
-    engine::{http::Config as HttpConfig, udp::Config as UdpConfig},
+use dwd_core::{
+    cfg::{BoxedGeneratorNew, ModeConfig},
     generator::{self, Generator, LineGenerator},
-    VecProduce,
 };
 
+use crate::cmd::Cmd;
+
+/// Top-level application config.
 #[derive(Debug)]
 pub struct Config {
+    /// The selected load mode and its resolved config.
     pub mode: ModeConfig,
+    /// Deferred generator factory.
     pub generator_fn: BoxedGeneratorNew,
-    /// Address to expose API on.
+    /// Address to expose the Prometheus API on.
     pub api_addr: Option<SocketAddr>,
 }
 
@@ -42,12 +28,12 @@ impl TryFrom<Cmd> for Config {
     type Error = Box<dyn Error>;
 
     fn try_from(v: Cmd) -> Result<Self, Self::Error> {
-        let mode = v.mode.try_into()?;
+        let mode = v.mode.into_config()?;
         let api_addr = v.api_addr;
         let generator_fn = {
             let path = v.generator.clone();
 
-            Box::new(move || -> Result<Box<dyn Generator>, anyhow::Error> {
+            BoxedGeneratorNew::new(Box::new(move || -> Result<Box<dyn Generator>, anyhow::Error> {
                 match &path {
                     Some(path) => generator::load(path),
                     None => {
@@ -57,165 +43,9 @@ impl TryFrom<Cmd> for Config {
                         Ok(Box::new(generator))
                     }
                 }
-            })
+            }))
         };
 
-        let m = Self {
-            mode,
-            generator_fn: BoxedGeneratorNew(generator_fn),
-            api_addr,
-        };
-
-        Ok(m)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ModeConfig {
-    Http(HttpConfig<Request<Empty<Bytes>>>),
-    HttpRaw(HttpConfig<Bytes>),
-    Udp(UdpConfig),
-    #[cfg(feature = "dpdk")]
-    Dpdk(DpdkConfig),
-}
-
-impl TryFrom<ModeCmd> for ModeConfig {
-    type Error = Box<dyn Error>;
-
-    fn try_from(v: ModeCmd) -> Result<Self, Self::Error> {
-        let m = match v {
-            ModeCmd::Http(v) => Self::Http(v.try_into()?),
-            ModeCmd::HttpRaw(v) => Self::HttpRaw(v.cmd.try_into()?),
-            ModeCmd::Udp(v) => Self::Udp(v.try_into()?),
-            #[cfg(feature = "dpdk")]
-            ModeCmd::Dpdk(v) => Self::Dpdk(v.try_into()?),
-        };
-
-        Ok(m)
-    }
-}
-
-/// Native workload config.
-#[derive(Debug, Clone)]
-pub struct NativeLoadConfig {
-    /// Number of threads.
-    pub threads: NonZero<usize>,
-    /// Maximum number of requests executed per socket before reconnection.
-    /// If none given (default) sockets renew is disabled.
-    requests_per_socket: Option<u64>,
-    /// Deviation of the number of requests per socket.
-    requests_per_socket_deviation: Option<u64>,
-    /// Socket addresses to bind on.
-    pub bind_endpoints: Arc<VecProduce<SocketAddr>>,
-}
-
-impl NativeLoadConfig {
-    /// Returns the maximum number of requests executed per socket before
-    /// reconnection.
-    #[inline]
-    pub fn requests_per_socket(&self) -> u64 {
-        self.requests_per_socket.unwrap_or(u64::MAX)
-    }
-
-    /// Returns the deviation of the number of requests per socket.
-    #[inline]
-    pub fn requests_per_socket_deviation(&self) -> u64 {
-        self.requests_per_socket_deviation.unwrap_or(0)
-    }
-}
-
-impl TryFrom<NativeLoadCmd> for NativeLoadConfig {
-    type Error = Box<dyn Error>;
-
-    fn try_from(cmd: NativeLoadCmd) -> Result<Self, Self::Error> {
-        let NativeLoadCmd {
-            threads,
-            requests_per_socket,
-            requests_per_socket_deviation,
-            bind_network,
-        } = cmd;
-
-        let mut bind_endpoints = Vec::new();
-        match bind_network {
-            Some(net) => {
-                for link in pnet::datalink::interfaces() {
-                    if !link.is_up() || link.is_loopback() || link.ips.is_empty() {
-                        continue;
-                    }
-
-                    bind_endpoints.extend(
-                        link.ips
-                            .into_iter()
-                            .filter(|v| net.contains(v.ip()))
-                            .map(|v| SocketAddr::new(v.ip(), 0)),
-                    );
-                }
-            }
-            None => {
-                bind_endpoints.push(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0));
-            }
-        }
-
-        log::debug!("bind endpoints: {:?}", bind_endpoints);
-        let bind_endpoints = Arc::new(VecProduce::new(bind_endpoints));
-
-        let m = Self {
-            threads,
-            requests_per_socket,
-            requests_per_socket_deviation,
-            bind_endpoints,
-        };
-
-        Ok(m)
-    }
-}
-
-#[cfg(feature = "dpdk")]
-#[derive(Debug, Clone)]
-pub struct DpdkConfig(DpdkWorkerConfig);
-
-#[cfg(feature = "dpdk")]
-impl DpdkConfig {
-    #[inline]
-    pub fn into_inner(self) -> DpdkWorkerConfig {
-        self.0
-    }
-}
-
-#[cfg(feature = "dpdk")]
-impl TryFrom<DpdkCmd> for DpdkConfig {
-    type Error = Box<dyn Error>;
-
-    fn try_from(v: DpdkCmd) -> Result<Self, Self::Error> {
-        #[derive(Deserialize)]
-        struct Cfg {
-            master_lcore: CoreId,
-            ports: HashMap<PciDeviceName, PortConfig>,
-        }
-
-        let data = fs::read(&v.dpdk_path)?;
-        let cfg: Cfg = serde_yaml::from_slice(&data)?;
-
-        let m = Self(DpdkWorkerConfig::new(cfg.master_lcore, cfg.ports, v.pcap_path));
-
-        Ok(m)
-    }
-}
-
-pub type BoxedGenerator = Box<dyn Generator>;
-pub struct BoxedGeneratorNew(Box<dyn Fn() -> Result<BoxedGenerator, anyhow::Error>>);
-
-impl BoxedGeneratorNew {
-    #[inline]
-    pub fn create(&self) -> Result<BoxedGenerator, anyhow::Error> {
-        match self {
-            Self(f) => f(),
-        }
-    }
-}
-
-impl Debug for BoxedGeneratorNew {
-    fn fmt(&self, fmt: &mut Formatter) -> Result<(), fmt::Error> {
-        fmt.debug_tuple("GeneratorFn").finish()
+        Ok(Self { mode, generator_fn, api_addr })
     }
 }

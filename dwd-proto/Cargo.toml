@@ -1,0 +1,19 @@
+[package]
+name = "dwd-proto"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+publish = false
+description = "gRPC API definitions for DWD"
+license-file = "../LICENSE"
+repository = "https://github.com/yanet-platform/dwd"
+
+[dependencies]
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+# Vendored `protoc` so the build needs no system protobuf-compiler (CI, Docker).
+protoc-bin-vendored = "3"
