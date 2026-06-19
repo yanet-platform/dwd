@@ -52,13 +52,13 @@ jobs:
 
   # MSRV check.
   msrv:
-    name: MSRV (1.87)
+    name: MSRV (1.96)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.87"
+          toolchain: "1.96"
       - uses: Swatinem/rust-cache@v2
       - name: Check MSRV
         run: cargo check -p dwd

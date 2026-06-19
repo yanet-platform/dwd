@@ -6,7 +6,7 @@
 use core::error::Error;
 
 use clap::Parser;
-use dwd::{cfg::Config, cmd::Cmd, engine::Runtime};
+use dwd::{cfg::Config, cmd::Cmd, runtime::Runtime};
 use jemallocator::Jemalloc;
 use tokio::runtime::Builder;
 

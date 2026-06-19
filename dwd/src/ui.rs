@@ -24,7 +24,7 @@ use self::{
     metric::{Gauge, Meter, Metric, Throughput},
     widget::keymap::KeymapWidget,
 };
-use crate::{
+use dwd_core::{
     stat::{BurstTxStat, CommonStat, HttpStat, RxStat, SocketStat, TxStat},
     GeneratorEvent,
 };

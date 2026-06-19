@@ -1,0 +1,56 @@
+[package]
+name = "dwd-core"
+version = "0.6.2"
+edition = "2021"
+rust-version = "1.96"
+publish = false
+description = "Core load-generation engine, generators, shaper, stats and gRPC service for DWD"
+license-file = "../LICENSE"
+repository = "https://github.com/yanet-platform/dwd"
+
+[dependencies]
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+tokio = { version = "1", features = [
+    "rt",
+    "net",
+    "time",
+    "macros",
+    "sync",
+    "io-util",
+] }
+http = "1.2"
+bytes = "1.2"
+hyper = { version = "1.6", features = ["http1", "client"] }
+httparse = "1"
+pin-project-lite = "0.2"
+http-body-util = "0.1"
+anyhow = "1"
+pnet = "0.35"
+libc = "0.2"
+rand = "0.9"
+axum = "0.8"
+prometheus-client = "0.24"
+
+# gRPC service (server half of the in-process API seam).
+dwd-proto = { path = "../dwd-proto" }
+tonic = "0.14"
+tokio-stream = "0.1"
+
+# Optional DPDK FFI backend (Linux only, needs DPDK 24.11 installed).
+dpdk = { version = "0.1", path = "../dpdk", package = "dwd-dpdk", optional = true }
+thiserror = { version = "2", optional = true }
+pcap-parser = { version = "0.16", optional = true }
+etherparse = { version = "0.16", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+netlink-packet-core = { version = "0.7" }
+netlink-packet-route = { version = "0.20" }
+netlink-packet-sock-diag = "0.4.2"
+netlink-proto = "0.11.3"
+netlink-sys = { version = "0.8" }
+
+[features]
+dpdk = ["dep:dpdk", "dep:thiserror", "dep:pcap-parser", "dep:etherparse"]

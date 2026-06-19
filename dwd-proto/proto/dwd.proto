@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+package dwd.v1;
+
+// The control + observability API seam between the DWD CLI/TUI (client) and the
+// load-generating core (server).
+//
+// The service is consumed in-process over an in-memory transport (no sockets),
+// but the contract is a regular gRPC service so the CLI talks to the core
+// exclusively through this API.
+service Dwd {
+  // Describes the running engine so the client knows which statistics groups
+  // (i.e. which TUI widgets) to render. Replaces the previous compile-time
+  // `Ui::with_*` wiring that reached directly into the engine.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+
+  // Unary generator control. Replaces the in-process `GeneratorEvent` mpsc.
+  rpc Control(ControlRequest) returns (ControlResponse);
+
+  // Server stream of cumulative statistic snapshots (~UI frame cadence).
+  // Replaces the TUI reading the shared `Arc<Stat>` directly.
+  rpc StreamStats(StreamStatsRequest) returns (stream StatsSnapshot);
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  // Engine kind, e.g. "http", "http/raw", "udp", "dpdk".
+  string engine_kind = 1;
+  // Statistic groups to render, in display order. Mirrors the old `with_*` set.
+  repeated StatGroup groups = 2;
+}
+
+// Statistic groups, each mapping to one TUI builder method.
+enum StatGroup {
+  STAT_GROUP_UNSPECIFIED = 0;
+  STAT_GROUP_COMMON = 1;      // Ui::with_common
+  STAT_GROUP_TX = 2;          // Ui::with_tx
+  STAT_GROUP_RX = 3;          // Ui::with_rx
+  STAT_GROUP_RX_TIMINGS = 4;  // Ui::with_rx_timings
+  STAT_GROUP_SOCKET = 5;      // Ui::with_sock
+  STAT_GROUP_HTTP = 6;        // Ui::with_http
+  STAT_GROUP_BURST_TX = 7;    // Ui::with_burst_tx
+}
+
+message ControlRequest {
+  oneof kind {
+    SuspendControl suspend = 1;
+    ResumeControl resume = 2;
+    SetControl set = 3;
+  }
+}
+
+// Suspends generation (freezes the generator clock).
+message SuspendControl {}
+// Resumes generation.
+message ResumeControl {}
+// Overrides the current RPS with a fixed value (and suspends the profile).
+message SetControl {
+  uint64 rps = 1;
+}
+
+message ControlResponse {}
+
+message StreamStatsRequest {}
+
+// A single cumulative snapshot of engine statistics.
+//
+// All counters are ABSOLUTE CUMULATIVE values; the client derives rates and
+// throughput locally (exactly as the TUI does today), so the wire format never
+// carries pre-computed rates. The server fills only the sub-messages its engine
+// supports; an absent sub-message means that group is not available.
+message StatsSnapshot {
+  uint64 generator_rps = 1; // CommonStat::generator()
+  optional TxStats tx = 2;
+  optional RxStats rx = 3;
+  optional SocketStats socket = 4;
+  optional HttpStats http = 5;
+  optional BurstTxStats burst_tx = 6;
+}
+
+message TxStats {
+  uint64 num_requests = 1;
+  uint64 bytes_tx = 2;
+}
+
+message RxStats {
+  uint64 num_responses = 1;
+  uint64 num_timeouts = 2;
+  uint64 bytes_rx = 3;
+  // Aggregated `LogHistogram` bucket counts. The logarithmic factor is a shared
+  // constant (1.5) known on both sides, so it is not transmitted.
+  repeated uint64 histogram_buckets = 4;
+}
+
+message SocketStats {
+  uint64 num_sock_created = 1;
+  uint64 num_sock_errors = 2;
+  uint64 num_retransmits = 3;
+}
+
+message HttpStats {
+  uint64 num_2xx = 1;
+  uint64 num_3xx = 2;
+  uint64 num_4xx = 3;
+  uint64 num_5xx = 4;
+}
+
+message BurstTxStats {
+  // Raw per-burst-size counters; index `i` corresponds to `num_bursts_tx(i)`.
+  repeated uint64 num_bursts_tx = 1;
+}
