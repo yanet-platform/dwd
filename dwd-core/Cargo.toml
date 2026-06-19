@@ -54,3 +54,18 @@ netlink-sys = { version = "0.8" }
 
 [features]
 dpdk = ["dep:dpdk", "dep:thiserror", "dep:pcap-parser", "dep:etherparse"]
+
+[dev-dependencies]
+criterion = "0.7"
+
+[[bench]]
+name = "shaper"
+harness = false
+
+[[bench]]
+name = "generator"
+harness = false
+
+[[bench]]
+name = "histogram"
+harness = false
