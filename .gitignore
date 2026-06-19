@@ -7,3 +7,6 @@ dwd/etc/dwd/*.pcap
 /vendor
 /dist
 Makefile
+
+# Claude Code: commit shared config (skills/hooks/settings.json), keep personal overrides local
+.claude/settings.local.json
