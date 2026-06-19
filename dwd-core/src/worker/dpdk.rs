@@ -577,7 +577,7 @@ impl Worker {
                 )
             };
 
-            if self.packets_count_tx % (self.mbufs_count * 16 * 1024) == 0 {
+            if self.packets_count_tx.is_multiple_of(self.mbufs_count * 16 * 1024) {
                 for mbuf in &mut self.mbufs[..self.mbufs_count] {
                     unsafe { dpdk::rte_mbuf_refcnt_set(*mbuf, 16 * 1024 + 1024) };
                 }
