@@ -1,4 +1,4 @@
-//! gRPC API definitions for DWD, generated from `proto/dwd.proto` via tonic.
+//! gRPC API definitions for DWD, generated from `dwdpb/dwd.proto` via tonic.
 //!
 //! This crate is the single boundary the CLI/TUI uses to talk to the
 //! load-generating core. It contains only the generated wire types plus the
