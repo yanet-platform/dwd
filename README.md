@@ -294,7 +294,7 @@ The resulting load profile in this case will look like:
 
 - **Rust** - Install [Rust](https://www.rust-lang.org/tools/install) to build the project
 - **Linux** - Full functionality (including DPDK mode) is only available on Linux
-- **DPDK 19.11** - Required only if you want to build with DPDK support
+- **DPDK 24.11** - Required only if you want to build with DPDK support
 
 ### Standard Build (Without DPDK)
 
@@ -315,7 +315,7 @@ The binary will be available at `target/release/dwd`.
 
 Building with DPDK support requires:
 
-1. Install DPDK 19.11 dependencies:
+1. Install DPDK 24.11 dependencies:
 
 ```bash
 apt install -y libnuma1 libibverbs1 libnuma-dev
@@ -333,6 +333,6 @@ The DPDK-enabled binary will be available at `target/release/dwd`.
 
 If you encounter build issues with DPDK support:
 
-1. Ensure you have the required DPDK 19.11 dependencies installed
+1. Ensure you have the required DPDK 24.11 dependencies installed
 2. Make sure hugepages are properly configured when running in DPDK mode
-3. Check that your network card is supported by DPDK 19.11
+3. Check that your network card is supported by DPDK 24.11
