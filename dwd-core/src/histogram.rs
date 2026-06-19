@@ -2,6 +2,14 @@ use core::cell::UnsafeCell;
 
 const FACTOR: f64 = 1.5;
 
+/// Reciprocal of `ln(FACTOR)`, precomputed so [`PerCpuLogHistogram::record`]
+/// performs a single `ln` plus a multiply instead of the two transcendental
+/// calls hidden inside `f64::log` (which evaluates `self.ln() / FACTOR.ln()`
+/// on every call). Multiplying by this constant is bit-for-bit identical to
+/// `(us as f64).log(FACTOR)` for every input, so bucket boundaries are
+/// preserved exactly (verified by the equivalence test below).
+const INV_LN_FACTOR: f64 = 2.4663034623764317; // == 1.0 / FACTOR.ln()
+
 #[derive(Debug)]
 pub struct PerCpuLogHistogram {
     buckets: Vec<UnsafeCell<u64>>,
@@ -14,7 +22,7 @@ impl PerCpuLogHistogram {
 
     #[inline]
     pub fn record(&self, us: u64) {
-        let idx = (us as f64).log(FACTOR) as usize;
+        let idx = ((us as f64).ln() * INV_LN_FACTOR) as usize;
         let idx = idx.min(self.buckets.len() - 1);
 
         unsafe { *self.buckets[idx].get() += 1 };
@@ -144,5 +152,87 @@ impl LogHistogram {
         }
 
         u64::MAX
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The hand-written `INV_LN_FACTOR` constant must equal `1.0 / FACTOR.ln()`
+    /// to the last bit; otherwise the optimized bucket index could drift from
+    /// the original `log(FACTOR)` mapping.
+    #[test]
+    fn inv_ln_factor_matches_factor() {
+        assert_eq!(INV_LN_FACTOR, 1.0 / FACTOR.ln());
+    }
+
+    /// Reference bucket index using the original transcendental form.
+    fn ref_idx(us: u64, len: usize) -> usize {
+        let idx = (us as f64).log(FACTOR) as usize;
+        idx.min(len - 1)
+    }
+
+    /// Optimized bucket index as computed by [`PerCpuLogHistogram::record`].
+    fn opt_idx(us: u64, len: usize) -> usize {
+        let idx = ((us as f64).ln() * INV_LN_FACTOR) as usize;
+        idx.min(len - 1)
+    }
+
+    /// The optimized index must equal the reference index for every input:
+    /// dense low sweep, every bucket boundary +/- a few microseconds, zero,
+    /// the largest recordable value, and extreme `u64` values.
+    #[test]
+    fn record_index_is_identical() {
+        let len = PerCpuLogHistogram::default().buckets().len();
+
+        // Dense sweep over small values (covers sub-1.0 -> 0 and the low
+        // buckets where rounding is most sensitive).
+        for us in 0u64..1_000_000 {
+            assert_eq!(opt_idx(us, len), ref_idx(us, len), "dense us={us}");
+        }
+
+        // Around every bucket boundary f^k.
+        let mut curr = 1.0_f64;
+        for _ in 0..len + 5 {
+            for d in [-2i64, -1, 0, 1, 2] {
+                let us = (curr as i64 + d).max(0) as u64;
+                assert_eq!(opt_idx(us, len), ref_idx(us, len), "boundary us={us}");
+            }
+            curr *= FACTOR;
+        }
+
+        // Edge / extreme values.
+        for us in [
+            0,
+            1,
+            60_000_000, // ~max bucket boundary (60s)
+            90_000_000,
+            1u64 << 40,
+            1u64 << 63,
+            u64::MAX - 1,
+            u64::MAX,
+        ] {
+            assert_eq!(opt_idx(us, len), ref_idx(us, len), "edge us={us}");
+        }
+    }
+
+    /// `record` must land samples in the same buckets the reference math
+    /// predicts (end-to-end sanity over the optimized write path).
+    #[test]
+    fn record_lands_in_reference_bucket() {
+        let hist = PerCpuLogHistogram::default();
+        let len = hist.buckets().len();
+        let samples = [0u64, 1, 10, 100, 1_000, 5_000, 50_000, 500_000, 5_000_000];
+        for &us in &samples {
+            hist.record(us);
+        }
+        let mut expected = vec![0u64; len];
+        for &us in &samples {
+            expected[ref_idx(us, len)] += 1;
+        }
+        for (i, b) in hist.buckets().iter().enumerate() {
+            assert_eq!(unsafe { *b.get() }, expected[i], "bucket {i}");
+        }
     }
 }
