@@ -6,6 +6,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_client(true)
         .build_server(true)
-        .compile_protos(&["proto/dwd.proto"], &["proto"])?;
+        .compile_protos(&["dwdpb/dwd.proto"], &["dwdpb"])?;
     Ok(())
 }
