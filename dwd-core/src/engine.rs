@@ -16,6 +16,7 @@ use crate::{
     cfg::{BoxedGeneratorNew, ModeConfig},
     engine::{
         http::{Engine as HttpEngine, EngineRaw as HttpEngineRaw},
+        http3::Engine as Http3Engine,
         udp::Engine as UdpEngine,
     },
     generator::{Generator, SuspendableGenerator},
@@ -26,6 +27,7 @@ use crate::{
 
 mod coro;
 pub mod http;
+pub mod http3;
 mod runtime;
 pub mod udp;
 
@@ -119,6 +121,42 @@ impl Engine for HttpEngineRaw {
     }
 }
 
+impl Engine for Http3Engine {
+    fn generator(&self) -> SharedGenerator {
+        self.stat().generator()
+    }
+
+    fn limits(&self) -> Vec<Arc<AtomicU64>> {
+        self.limits().into_iter().flatten().collect()
+    }
+
+    fn describe(&self) -> EngineDescriptor {
+        EngineDescriptor {
+            engine_kind: "http3",
+            groups: vec![
+                StatGroup::Common,
+                StatGroup::Tx,
+                StatGroup::Rx,
+                StatGroup::Http,
+                StatGroup::Socket,
+                StatGroup::RxTimings,
+            ],
+        }
+    }
+
+    fn snapshot_source(&self) -> Arc<dyn SnapshotSource> {
+        self.stat()
+    }
+
+    fn stat_source(&self) -> Arc<dyn StatSource> {
+        self.stat()
+    }
+
+    fn run(self: Box<Self>, is_running: Arc<AtomicBool>) -> Result<(), Error> {
+        Self::run(*self, future::pending(), is_running)
+    }
+}
+
 impl Engine for UdpEngine {
     fn generator(&self) -> SharedGenerator {
         self.stat().generator()
@@ -183,6 +221,7 @@ pub fn build(mode: ModeConfig) -> Result<Box<dyn Engine>, Error> {
     let engine: Box<dyn Engine> = match mode {
         ModeConfig::Http(cfg) => Box::new(HttpEngine::new(cfg)),
         ModeConfig::HttpRaw(cfg) => Box::new(HttpEngineRaw::new(cfg)),
+        ModeConfig::Http3(cfg) => Box::new(Http3Engine::new(cfg)),
         ModeConfig::Udp(cfg) => Box::new(UdpEngine::new(cfg)),
         #[cfg(feature = "dpdk")]
         ModeConfig::Dpdk(cfg) => Box::new(DpdkEngine::new(cfg.into_inner())?),
