@@ -14,6 +14,7 @@ use dwd_core::{
     cfg::{ModeConfig, NativeLoadConfig},
     engine::{
         http::{payload::jsonline::JsonLineRecord, Config as HttpConfig},
+        http3::Config as Http3Config,
         udp::Config as UdpConfig,
     },
 };
@@ -48,6 +49,12 @@ pub enum ModeCmd {
     /// Fast, but restricted HTTP mode.
     #[command(name = "http/raw")]
     HttpRaw(HttpRawCmd),
+    /// HTTP/3 (QUIC) mode.
+    ///
+    /// Establishes HTTP/3 connections over QUIC. TLS certificate verification
+    /// is disabled by default, which suits load testing against staging hosts
+    /// and bare IPs.
+    Http3(Http3Cmd),
     /// UDP mode.
     ///
     /// Response packets (if any) will be ignored.
@@ -71,6 +78,7 @@ impl ModeCmd {
         let m = match self {
             ModeCmd::Http(v) => ModeConfig::Http(v.into_config()?),
             ModeCmd::HttpRaw(v) => ModeConfig::HttpRaw(v.cmd.into_config()?),
+            ModeCmd::Http3(v) => ModeConfig::Http3(v.into_config()?),
             ModeCmd::Udp(v) => ModeConfig::Udp(v.into_config()?),
             #[cfg(feature = "dpdk")]
             ModeCmd::Dpdk(v) => ModeConfig::Dpdk(v.into_config()?),
@@ -140,6 +148,60 @@ impl HttpCmd {
             timeout: Duration::try_from_secs_f64(timeout)?,
             tcp_linger,
             tcp_no_delay,
+            requests,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct Http3Cmd {
+    /// Target endpoint.
+    #[clap(required = true, value_name = "IPv4:PORT or [IPv6]:PORT")]
+    pub addr: SocketAddr,
+    /// TLS server name (SNI) presented during the QUIC handshake.
+    ///
+    /// Certificate verification is disabled, so this only affects the SNI
+    /// extension the server may route on. Defaults to "localhost".
+    #[clap(long, default_value = "localhost")]
+    pub server_name: String,
+    /// Native workload settings.
+    #[clap(flatten)]
+    pub native: NativeLoadCmd,
+    /// Number of parallel jobs.
+    ///
+    /// This also limits the maximum concurrent connections. To achieve better
+    /// runtime characteristics this value should be a multiple of the number of
+    /// threads.
+    #[clap(short, long, default_value_t = std::thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN))]
+    pub concurrency: NonZero<usize>,
+    /// Path to the JSON payload file.
+    #[clap(long, value_name = "PATH")]
+    pub payload_json: PathBuf,
+    /// Request timeout in seconds with fractional part.
+    #[clap(long, default_value_t = 4.0)]
+    pub timeout: f64,
+}
+
+impl Http3Cmd {
+    /// Loads the payloads and resolves this command into an HTTP/3 engine config.
+    pub fn into_config(self) -> Result<Http3Config<http::Request<()>>, Box<dyn Error>> {
+        let Http3Cmd {
+            addr,
+            server_name,
+            native,
+            concurrency,
+            payload_json,
+            timeout,
+        } = self;
+
+        let requests = JsonLineRecord::from_fs(payload_json)?;
+
+        Ok(Http3Config {
+            addr,
+            server_name,
+            native: native.into_config()?,
+            concurrency,
+            timeout: Duration::try_from_secs_f64(timeout)?,
             requests,
         })
     }

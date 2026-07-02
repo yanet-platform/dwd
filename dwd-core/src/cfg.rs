@@ -17,7 +17,7 @@ use http_body_util::Empty;
 #[cfg(feature = "dpdk")]
 use crate::worker::dpdk::Config as DpdkWorkerConfig;
 use crate::{
-    engine::{http::Config as HttpConfig, udp::Config as UdpConfig},
+    engine::{http::Config as HttpConfig, http3::Config as Http3Config, udp::Config as UdpConfig},
     generator::Generator,
     VecProduce,
 };
@@ -27,6 +27,7 @@ use crate::{
 pub enum ModeConfig {
     Http(HttpConfig<Request<Empty<Bytes>>>),
     HttpRaw(HttpConfig<Bytes>),
+    Http3(Http3Config<Request<()>>),
     Udp(UdpConfig),
     #[cfg(feature = "dpdk")]
     Dpdk(DpdkConfig),

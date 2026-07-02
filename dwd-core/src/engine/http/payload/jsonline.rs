@@ -120,6 +120,36 @@ impl TryFrom<JsonLineRecord> for Bytes {
     }
 }
 
+/// HTTP/3 request payload.
+///
+/// Unlike HTTP/1, the `h3` client takes the request head as `Request<()>` and
+/// streams the (here empty) body separately, so the payload type carries no
+/// body. The dedicated `host` field is set as a single `Host` header (mirroring
+/// the HTTP/1 conversion); any `Host` inside the record's `headers` map is
+/// dropped so it can neither shadow the top-level value nor produce a duplicate.
+impl TryFrom<JsonLineRecord> for Request<()> {
+    type Error = Box<dyn Error>;
+
+    fn try_from(v: JsonLineRecord) -> Result<Self, Self::Error> {
+        let mut request = Request::builder()
+            .method(v.method)
+            .uri(v.uri)
+            .header(header::HOST, v.host);
+
+        for (name, value) in v.headers.into_iter() {
+            if let Some(name) = name {
+                if name == header::HOST {
+                    continue;
+                }
+                request = request.header(name, value);
+            }
+        }
+        let request = request.body(())?;
+
+        Ok(request)
+    }
+}
+
 fn deserialize_http_uri<'de, D>(de: D) -> Result<Uri, D::Error>
 where
     D: Deserializer<'de>,
@@ -191,4 +221,41 @@ where
     }
 
     Ok(headers)
+}
+
+#[cfg(test)]
+mod tests {
+    use http::{header, Method, Request};
+
+    use super::JsonLineRecord;
+
+    fn parse(line: &str) -> JsonLineRecord {
+        serde_json::from_str(line).expect("valid record")
+    }
+
+    #[test]
+    fn http3_request_maps_head_and_host() {
+        let record = parse(r#"{"uri":"/ping?x=1","method":"POST","host":"example.com","headers":{"X-Test":"1"}}"#);
+
+        let req: Request<()> = record.try_into().expect("convertible");
+
+        assert_eq!(req.method(), Method::POST);
+        assert_eq!(req.uri().path(), "/ping");
+        assert_eq!(req.uri().query(), Some("x=1"));
+        assert_eq!(req.headers().get(header::HOST).unwrap(), "example.com");
+        assert_eq!(req.headers().get("x-test").unwrap(), "1");
+    }
+
+    #[test]
+    fn http3_request_prefers_top_level_host_over_header() {
+        // A "Host" inside headers must not shadow the dedicated `host` field,
+        // and it must not produce a duplicate Host header.
+        let record = parse(r#"{"uri":"/","method":"GET","host":"real.host","headers":{"Host":"ignored.host"}}"#);
+
+        let req: Request<()> = record.try_into().expect("convertible");
+
+        let hosts: Vec<_> = req.headers().get_all(header::HOST).into_iter().collect();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0], "real.host");
+    }
 }

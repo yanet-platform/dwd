@@ -27,6 +27,17 @@ hyper = { version = "1.6", features = ["http1", "client"] }
 httparse = "1"
 pin-project-lite = "0.2"
 http-body-util = "0.1"
+
+# HTTP/3 (QUIC) client stack. `h3-quinn` re-exports `quinn`; quinn is pulled in
+# with its rustls-ring crypto provider enabled (h3-quinn disables quinn default
+# features). `rustls` provides the TLS 1.3 config QUIC mandates.
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+quinn = { version = "0.11", default-features = false, features = [
+    "runtime-tokio",
+    "rustls-ring",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 anyhow = "1"
 pnet = "0.35"
 libc = "0.2"
