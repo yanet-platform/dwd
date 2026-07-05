@@ -124,17 +124,30 @@ impl TryFrom<JsonLineRecord> for Bytes {
 ///
 /// Unlike HTTP/1, the `h3` client takes the request head as `Request<()>` and
 /// streams the (here empty) body separately, so the payload type carries no
-/// body. The dedicated `host` field is set as a single `Host` header (mirroring
-/// the HTTP/1 conversion); any `Host` inside the record's `headers` map is
-/// dropped so it can neither shadow the top-level value nor produce a duplicate.
+/// body.
+///
+/// In HTTP/3 the `Host` header is replaced by the `:authority` pseudo-header
+/// (RFC 9114 §4.3.1). The `h3` crate derives `:authority` exclusively from the
+/// authority component of the request URI — it does **not** promote a `Host`
+/// header into `:authority` automatically. Therefore the dedicated `host` field
+/// is embedded into the URI as its authority so that `h3` emits a correct
+/// `:authority` pseudo-header. Any `Host` entry in the record's `headers` map
+/// is dropped: it would either duplicate or contradict the URI authority.
 impl TryFrom<JsonLineRecord> for Request<()> {
     type Error = Box<dyn Error>;
 
     fn try_from(v: JsonLineRecord) -> Result<Self, Self::Error> {
-        let mut request = Request::builder()
-            .method(v.method)
-            .uri(v.uri)
-            .header(header::HOST, v.host);
+        // Rebuild the URI with authority so that `h3` emits `:authority`.
+        // The URI validator guarantees the record URI is relative (path only),
+        // so the only authority component is the `host` field.
+        let uri = {
+            let mut parts = v.uri.into_parts();
+            parts.scheme = Some(http::uri::Scheme::HTTPS);
+            parts.authority = Some(v.host.parse()?);
+            Uri::from_parts(parts)?
+        };
+
+        let mut request = Request::builder().method(v.method).uri(uri);
 
         for (name, value) in v.headers.into_iter() {
             if let Some(name) = name {
@@ -225,7 +238,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use http::{header, Method, Request};
+    use http::{header, uri::Scheme, Method, Request};
 
     use super::JsonLineRecord;
 
@@ -240,22 +253,26 @@ mod tests {
         let req: Request<()> = record.try_into().expect("convertible");
 
         assert_eq!(req.method(), Method::POST);
+        // The host is now in the URI authority, not in a Host header.
+        assert_eq!(req.uri().authority().unwrap().as_str(), "example.com");
+        assert_eq!(req.uri().scheme().unwrap(), &Scheme::HTTPS);
         assert_eq!(req.uri().path(), "/ping");
         assert_eq!(req.uri().query(), Some("x=1"));
-        assert_eq!(req.headers().get(header::HOST).unwrap(), "example.com");
+        // No Host header — authority is carried by :authority pseudo-header.
+        assert!(req.headers().get(header::HOST).is_none());
         assert_eq!(req.headers().get("x-test").unwrap(), "1");
     }
 
     #[test]
     fn http3_request_prefers_top_level_host_over_header() {
-        // A "Host" inside headers must not shadow the dedicated `host` field,
-        // and it must not produce a duplicate Host header.
+        // A "Host" inside headers must not shadow the dedicated `host` field.
+        // The top-level host becomes the URI authority; the Host header entry
+        // is dropped entirely.
         let record = parse(r#"{"uri":"/","method":"GET","host":"real.host","headers":{"Host":"ignored.host"}}"#);
 
         let req: Request<()> = record.try_into().expect("convertible");
 
-        let hosts: Vec<_> = req.headers().get_all(header::HOST).into_iter().collect();
-        assert_eq!(hosts.len(), 1);
-        assert_eq!(hosts[0], "real.host");
+        assert_eq!(req.uri().authority().unwrap().as_str(), "real.host");
+        assert!(req.headers().get(header::HOST).is_none());
     }
 }
