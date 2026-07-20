@@ -7,7 +7,7 @@ use core::{
 };
 use std::{sync::Arc, time::Instant};
 
-use anyhow::Error;
+use anyhow::{anyhow, Error};
 use bytes::{Bytes, BytesMut};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -72,6 +72,12 @@ impl EngineRaw {
     where
         F: Future<Output = ()> + 'static,
     {
+        if self.cfg.tls {
+            return Err(anyhow!(
+                "TLS (HTTPS) is not supported in http/raw mode; use the `http` mode instead"
+            ));
+        }
+
         let num_threads = self.cfg.native.threads;
 
         let bind = self.cfg.native.bind_endpoints.clone();
