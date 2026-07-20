@@ -113,6 +113,17 @@ There is a possibility of bursts (grouping requests/packets into a bunch and sen
 
 If the `--requests-per-socket=N` option is specified, then every `N` requests the socket is recreated. The port is selected from free ones by the operating system.
 
+### HTTPS
+
+The `http` mode can speak HTTPS by passing `--tls`; every connection then performs a TLS handshake before the HTTP/1 exchange. Since load testing usually targets staging hosts and bare IPs, **certificate verification is disabled** — any presented certificate is accepted. Use `--server-name <NAME>` to set the TLS SNI hostname the server may route on; when omitted, the target IP is used and the (hostname-only) SNI extension is suppressed.
+
+```bash
+dwd http 127.0.0.1:443 --tls --payload-json ammo.jsonl
+dwd http 127.0.0.1:443 --tls --server-name example.org --payload-json ammo.jsonl
+```
+
+TLS is not supported by the restricted `http/raw` mode (passing `--tls` there is an error). The `http3` mode is always over TLS, as QUIC mandates it.
+
 ## DPDK mode
 
 In this mode, there is no kernel network stack - all packet preparation and processing occurs in user space by separating the network card from the kernel, with very careful tuning of the hardware on which the DWD is launched.

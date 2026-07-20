@@ -61,8 +61,11 @@ impl ServerCertVerifier for NoVerifier {
 pub fn insecure_client_config() -> ClientConfig {
     let provider = Arc::new(ring::default_provider());
 
+    // QUIC mandates TLS 1.3; pin it explicitly so the config stays valid for
+    // `QuicClientConfig` even when the `tls12` feature is enabled crate-wide
+    // (the HTTP/1 engine turns it on for broader server compatibility).
     let mut config = ClientConfig::builder_with_provider(provider.clone())
-        .with_safe_default_protocol_versions()
+        .with_protocol_versions(&[&rustls::version::TLS13])
         .expect("ring provider supports TLS 1.3")
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoVerifier(provider)))

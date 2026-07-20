@@ -109,6 +109,19 @@ pub struct HttpCmd {
     /// the number of threads.
     #[clap(short, long, default_value_t = std::thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN))]
     pub concurrency: NonZero<usize>,
+    /// Speak HTTPS (TLS) instead of plaintext HTTP.
+    ///
+    /// TLS certificate verification is disabled, which suits load testing
+    /// against staging hosts and bare IPs.
+    #[clap(long)]
+    pub tls: bool,
+    /// TLS server name (SNI) presented during the handshake.
+    ///
+    /// Only takes effect together with `--tls`. Certificate verification is
+    /// disabled, so this only affects the SNI extension the server may route
+    /// on. When omitted, the target IP is used and SNI is suppressed.
+    #[clap(long)]
+    pub server_name: Option<String>,
     /// Path to the JSON payload file.
     #[clap(long, value_name = "PATH")]
     pub payload_json: PathBuf,
@@ -133,6 +146,8 @@ impl HttpCmd {
             addr,
             native,
             concurrency,
+            tls,
+            server_name,
             payload_json,
             timeout,
             tcp_linger,
@@ -145,6 +160,8 @@ impl HttpCmd {
             addr,
             native: native.into_config()?,
             concurrency,
+            tls,
+            server_name,
             timeout: Duration::try_from_secs_f64(timeout)?,
             tcp_linger,
             tcp_no_delay,

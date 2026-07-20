@@ -11,8 +11,18 @@ pub struct Config<T> {
     ///
     /// This also limits the maximum concurrent requests in flight. To achieve
     /// better runtime characteristics this value should be the multiple of
-    /// the number of threads.   
+    /// the number of threads.
     pub concurrency: NonZero<usize>,
+    /// Speak HTTPS (TLS) instead of plaintext HTTP.
+    ///
+    /// Certificate verification is disabled, which suits load testing against
+    /// staging hosts and bare IPs. Only honored by the hyper `http` engine.
+    pub tls: bool,
+    /// TLS server name (SNI) presented during the handshake.
+    ///
+    /// Only meaningful with [`tls`](Self::tls). When `None`, the target IP is
+    /// used and the (hostname-only) SNI extension is suppressed.
+    pub server_name: Option<String>,
     /// Native workload settings.
     pub native: NativeLoadConfig,
     /// Request timeout.

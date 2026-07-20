@@ -20,7 +20,7 @@ use hyper::client::conn::http1::{self, SendRequest};
 use rand::{rngs::ThreadRng, Rng};
 use tokio::net::TcpSocket;
 
-use super::cfg::Config;
+use super::{cfg::Config, tls::Tls};
 use crate::{
     engine::{
         coro::ShapedCoroWorker,
@@ -84,9 +84,19 @@ impl Engine {
         let bind = self.cfg.native.bind_endpoints.clone();
         let data = Arc::new(VecProduce::new(self.cfg.requests.clone()));
 
+        // The TLS config is immutable, so the connector is built once at startup
+        // and cloned across all workers/connections. This keeps the reconnect
+        // path free of TLS/crypto setup allocations (perf contract).
+        let tls = if self.cfg.tls {
+            Some(Tls::new(self.cfg.server_name.as_deref(), self.cfg.addr.ip())?)
+        } else {
+            None
+        };
+
         let thread_pool = ThreadPool::new(num_threads, |tid: usize| {
             let bind = bind.clone();
             let data = data.clone();
+            let tls = tls.clone();
             let requests_per_socket = self.cfg.native.requests_per_socket();
             let requests_per_socket_deviation = self.cfg.native.requests_per_socket_deviation();
             let stat = self.stat.stats[tid].clone();
@@ -105,6 +115,7 @@ impl Engine {
                     self.cfg.addr,
                     bind.clone(),
                     data.clone(),
+                    tls.clone(),
                     requests_per_socket_gen,
                     self.cfg.timeout,
                     self.cfg.tcp_linger,
@@ -164,6 +175,8 @@ struct CoroWorker<B, D> {
     bind: B,
     /// Data to send.
     data: D,
+    /// TLS client, when speaking HTTPS. `None` means plaintext HTTP.
+    tls: Option<Tls>,
     /// Current TCP socket.
     stream: Option<TcpStream>,
     /// The number of requests left for the currently active socket.
@@ -188,6 +201,7 @@ impl<B, D> CoroWorker<B, D> {
         addr: SocketAddr,
         bind: B,
         data: D,
+        tls: Option<Tls>,
         requests_per_sock_gen: RequestsPerSocket,
         timeout: Duration,
         tcp_linger: Option<u64>,
@@ -201,6 +215,7 @@ impl<B, D> CoroWorker<B, D> {
             addr,
             bind,
             data,
+            tls,
             stream: None,
             requests_per_sock_left,
             requests_per_sock_gen,
@@ -315,18 +330,37 @@ where
         }
         self.stat.on_sock_created();
 
-        let io = TokioIo::new(stream);
-        let (sender, conn) = http1::handshake(io).await?;
-        tokio::task::spawn(async move {
-            if let Err(err) = conn.await {
-                log::error!("connection failed: {err}");
-            }
-        });
+        // Optionally negotiate TLS before the HTTP/1 handshake. The two branches
+        // produce different concrete stream types, so each drives the (generic)
+        // handshake itself; both converge on the same transport-agnostic
+        // `SendRequest`.
+        let sender = match &self.tls {
+            Some(tls) => handshake(TokioIo::new(tls.connect(stream).await?)).await?,
+            None => handshake(TokioIo::new(stream)).await?,
+        };
 
         let stream = TcpStream::new(stat, sender);
 
         Ok(stream)
     }
+}
+
+/// Drives the HTTP/1 handshake over `io`, spawning the connection task, and
+/// returns the request sender. Monomorphized over the transport, so it serves
+/// both plaintext TCP and TLS streams.
+#[inline]
+async fn handshake<I>(io: I) -> Result<SendRequest<Empty<Bytes>>, Error>
+where
+    I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
+{
+    let (sender, conn) = http1::handshake(io).await?;
+    tokio::task::spawn(async move {
+        if let Err(err) = conn.await {
+            log::error!("connection failed: {err}");
+        }
+    });
+
+    Ok(sender)
 }
 
 impl<B, D> Task for CoroWorker<B, D>
