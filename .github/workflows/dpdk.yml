@@ -65,3 +65,58 @@ jobs:
           name: dwd-debian-package
           path: dist/*.deb
           if-no-files-found: error
+
+  # Build DPDK-enabled binary for Ubuntu 18.04 (GLIBC 2.27, max compatibility).
+  dpdk-build-compat:
+    name: Build with DPDK 24.11 (Ubuntu 18.04 compat)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image with DPDK (Ubuntu 18.04)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.ubuntu18
+          push: false
+          tags: dwd:dpdk-build-compat
+          load: true
+          cache-from: type=gha,scope=ubuntu18
+          cache-to: type=gha,mode=max,scope=ubuntu18
+
+      - name: Extract artifacts from Docker image
+        run: |
+          # Create container from image.
+          CONTAINER_ID=$(docker create dwd:dpdk-build-compat)
+
+          # Create output directory.
+          mkdir -p dist
+
+          # Copy binary from container.
+          docker cp $CONTAINER_ID:/src/target/release/dwd dist/dwd-dpdk-compat
+
+          # Copy bundled debian package (with rdma-core libs) from /src/dist/.
+          docker cp $CONTAINER_ID:/src/dist/. dist/
+
+          # Cleanup.
+          docker rm $CONTAINER_ID
+
+          # List artifacts.
+          ls -la dist/
+
+      - name: Upload DPDK binary (compat)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwd-dpdk-linux-x86_64-compat
+          path: dist/dwd-dpdk-compat
+          if-no-files-found: error
+
+      - name: Upload debian package (compat)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwd-debian-package-compat
+          path: dist/*.deb
+          if-no-files-found: error

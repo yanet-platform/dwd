@@ -524,7 +524,7 @@ checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
 
 [[package]]
 name = "dwd"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "dwd-core"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "axum",
