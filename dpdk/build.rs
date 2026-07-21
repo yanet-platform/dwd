@@ -9,7 +9,10 @@ fn main() {
 
     // Path where DPDK 24.11 static libraries are located.
     // Note: DPDK 24.11 installs to lib64 by default, but some distros use lib/x86_64-linux-gnu.
-    const DPDK_LIBRARY_PATHS: &[&str] = &["/usr/local/lib64", "/usr/local/lib/x86_64-linux-gnu"];
+    // Plain /usr/local/lib must be listed explicitly: rdma-core built from source (the
+    // Ubuntu 18.04 compat image) installs there, and rust-lld — the default linker since
+    // Rust 1.90 — does not search it by default, unlike GNU ld.
+    const DPDK_LIBRARY_PATHS: &[&str] = &["/usr/local/lib64", "/usr/local/lib/x86_64-linux-gnu", "/usr/local/lib"];
 
     // DPDK 24.11 core libraries to link with (static).
     const RTE_CORE_LIBS: &[&str] = &[
