@@ -146,6 +146,17 @@ Here, `macter_lcore` specifies the number of the logical core on which the contr
 
 Packets from a given file are distributed evenly among workers before shooting (the first packet to the first, the second to the second, etc.), and when all the packets are distributed, they will be released in a cycle within their worker.
 
+## Headless mode
+
+By default DWD opens an interactive control UI in the terminal. Passing the global `--no-ui` flag runs it headless: no UI is drawn, the load runs until the profile is exhausted or the process receives `SIGINT` (Ctrl-C) or `SIGTERM`, then shuts down gracefully. This suits scripted runs, CI, containers and remote sessions.
+
+Since there is no UI to type the desired RPS into, drive the load with a profile file (`--generator`), and combine with `--api-addr` to keep observing the generator state and metrics:
+
+```bash
+dwd udp <IP:PORT> --no-ui --generator profile.yaml --api-addr 127.0.0.1:8080
+curl http://127.0.0.1:8080/api/v1/metrics
+```
+
 ## Load profiles
 A load profile is a declarative description of how the load should be generated and for how long.
 
