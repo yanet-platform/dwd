@@ -12,6 +12,7 @@ pub fn init(verbosity: usize) -> Result<(), Box<dyn Error>> {
 
     let filter_layer = Targets::new()
         .with_target("dwd", level)
+        .with_target("dwd_core", level)
         .with_target("dpdk", level)
         .with_default(LevelFilter::WARN.min(level));
     let fmt_layer = tracing_subscriber::fmt::layer().with_writer(stderr);

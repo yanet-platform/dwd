@@ -15,7 +15,7 @@ use std::{
 };
 
 use anyhow::Error;
-use dwd_core::{engine, grpc::DwdService};
+use dwd_core::{engine, grpc::DwdService, summary};
 use dwd_proto::DescribeRequest;
 use tokio::sync::mpsc;
 
@@ -50,7 +50,9 @@ impl Runtime {
         let generator = engine.generator();
         let stat_source = engine.stat_source();
         let snapshot_source = engine.snapshot_source();
-        let descriptor = engine.describe().into_response();
+        let descriptor = engine.describe();
+        let engine_kind = descriptor.engine_kind;
+        let descriptor = descriptor.into_response();
 
         // Start the Prometheus API server if configured — available both with
         // the TUI and headless.
@@ -104,6 +106,10 @@ impl Runtime {
             Some((ui, stats_handle, control_handle, server_handle))
         };
 
+        // Samples the achieved rate once a second for the end-of-run summary;
+        // shares the snapshot source the same way the Prometheus endpoint does.
+        let summary = summary::Recorder::spawn(engine_kind, engine.snapshot_source(), self.is_running.clone())?;
+
         let engine = {
             let is_running = self.is_running.clone();
             Builder::new()
@@ -137,6 +143,10 @@ impl Runtime {
             server_handle.abort();
         }
         engine.join().expect("no self join")?;
+
+        // The TUI (if any) has restored the terminal by now, so the report
+        // lands on a clean stderr.
+        summary.finish().log();
 
         if let Some(handle) = api_handle {
             handle.abort();
