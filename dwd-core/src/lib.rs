@@ -18,6 +18,7 @@ pub mod histogram;
 pub mod shaper;
 pub mod sockstat;
 pub mod stat;
+pub mod summary;
 pub mod worker;
 
 /// Thread-safe producing iterators.
