@@ -157,6 +157,41 @@ dwd udp <IP:PORT> --no-ui --generator profile.yaml --api-addr 127.0.0.1:8080
 curl http://127.0.0.1:8080/api/v1/metrics
 ```
 
+Alternatively (or additionally), expose the gRPC control API with `--grpc-addr` and drive the run remotely — see below.
+
+## Remote control (gRPC API)
+
+The interactive TUI talks to the load-generating core through a gRPC API (`dwd.v1.Dwd`, see `dwd-proto/dwdpb/dwd.proto`). Passing the global `--grpc-addr` flag exposes that same API on a network address, giving remote clients full control over the run — everything the TUI can do:
+
+- **`Control`** — set a fixed RPS, suspend/resume the load profile, or stop the run entirely (the engine drains and the process shuts down gracefully, exactly like a TUI exit or `SIGTERM`);
+- **`StreamStats`** — a live stream of cumulative statistic snapshots (requests, bytes, response codes, latency histogram buckets);
+- **`Describe`** — the engine kind and which statistic groups it provides.
+
+The flag works with and without the TUI; combined with `--no-ui` it makes a fully API-driven headless run:
+
+```bash
+dwd udp <IP:PORT> --no-ui --grpc-addr 127.0.0.1:8081
+```
+
+Server reflection is enabled, so `grpcurl` works without any proto files:
+
+```bash
+# Set the load to 5000 RPS:
+grpcurl -plaintext -d '{"set":{"rps":"5000"}}' 127.0.0.1:8081 dwd.v1.Dwd/Control
+
+# Suspend / resume the load profile:
+grpcurl -plaintext -d '{"suspend":{}}' 127.0.0.1:8081 dwd.v1.Dwd/Control
+grpcurl -plaintext -d '{"resume":{}}'  127.0.0.1:8081 dwd.v1.Dwd/Control
+
+# Watch live statistics:
+grpcurl -plaintext -d '{}' 127.0.0.1:8081 dwd.v1.Dwd/StreamStats
+
+# Stop the run gracefully:
+grpcurl -plaintext -d '{"stop":{}}' 127.0.0.1:8081 dwd.v1.Dwd/Control
+```
+
+Note: `set` overrides the profile with a fixed value (implicitly suspending it); `resume` returns control to the profile. The API is unauthenticated plaintext HTTP/2 — bind it to localhost or a trusted network only.
+
 ## Load profiles
 A load profile is a declarative description of how the load should be generated and for how long.
 

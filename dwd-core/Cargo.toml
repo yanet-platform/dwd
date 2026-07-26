@@ -51,10 +51,14 @@ rand = "0.9"
 axum = "0.8"
 prometheus-client = "0.24"
 
-# gRPC service (server half of the in-process API seam).
+# gRPC service (server half of the API seam; in-process for the TUI and
+# optionally exposed on a network address for remote control).
 dwd-proto = { path = "../dwd-proto" }
 tonic = "0.14"
-tokio-stream = "0.1"
+# Reflection lets `grpcurl` & co discover the API without local proto files.
+tonic-reflection = "0.14"
+# `net` provides `TcpListenerStream` for the network gRPC endpoint.
+tokio-stream = { version = "0.1", features = ["net"] }
 
 # Optional DPDK FFI backend (Linux only, needs DPDK 24.11 installed).
 dpdk = { version = "0.1", path = "../dpdk", package = "dwd-dpdk", optional = true }

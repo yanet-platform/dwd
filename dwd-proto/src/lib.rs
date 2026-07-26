@@ -10,3 +10,7 @@ pub mod pb {
 }
 
 pub use pb::*;
+
+/// Encoded `FileDescriptorSet` of the API, consumed by the gRPC reflection
+/// service so tools like `grpcurl` can discover the API without proto files.
+pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dwd_descriptor.bin"));
