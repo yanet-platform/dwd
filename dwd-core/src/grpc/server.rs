@@ -25,6 +25,10 @@ const STATS_INTERVAL: Duration = Duration::from_millis(25);
 const STATS_CHANNEL_CAP: usize = 4;
 
 /// The [`Dwd`] service implementation over the in-process core.
+///
+/// Cloning is cheap (channels and `Arc`s), so the same service can back both
+/// the in-memory TUI seam and the network endpoint at once.
+#[derive(Clone)]
 pub struct DwdService {
     /// Forwards control RPCs to `run_generator` (mirrors the old UI mpsc).
     control_tx: Sender<GeneratorEvent>,
@@ -65,6 +69,15 @@ impl Dwd for DwdService {
                 Kind::Suspend(_) => GeneratorEvent::Suspend,
                 Kind::Resume(_) => GeneratorEvent::Resume,
                 Kind::Set(set) => GeneratorEvent::Set(set.rps),
+                Kind::Stop(_) => {
+                    // Stop bypasses the generator channel: flipping the shared
+                    // run flag drains the engine and the generator loop exactly
+                    // as a TUI exit or SIGTERM would.
+                    log::info!("stop requested via the API");
+                    self.is_running.store(false, Ordering::SeqCst);
+
+                    return Ok(Response::new(ControlResponse {}));
+                }
             };
 
             // Non-blocking, coalescing send — mirrors the TUI's `try_send`: if the
@@ -101,5 +114,74 @@ impl Dwd for DwdService {
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dwd_proto::{SetControl, StatGroup, StopControl, SuspendControl};
+
+    use super::*;
+    use crate::grpc::snapshot::EngineDescriptor;
+
+    struct EmptySource;
+
+    impl SnapshotSource for EmptySource {
+        fn snapshot(&self) -> StatsSnapshot {
+            StatsSnapshot::default()
+        }
+    }
+
+    fn service() -> (DwdService, mpsc::Receiver<GeneratorEvent>, Arc<AtomicBool>) {
+        let (control_tx, control_rx) = mpsc::channel(1);
+        let descriptor = EngineDescriptor {
+            engine_kind: "udp",
+            groups: vec![StatGroup::Common],
+        }
+        .into_response();
+        let is_running = Arc::new(AtomicBool::new(true));
+        let service = DwdService::new(control_tx, Arc::new(EmptySource), descriptor, is_running.clone());
+
+        (service, control_rx, is_running)
+    }
+
+    #[tokio::test]
+    async fn control_forwards_generator_events() {
+        let (service, mut control_rx, is_running) = service();
+
+        service
+            .control(Request::new(ControlRequest {
+                kind: Some(Kind::Set(SetControl { rps: 1234 })),
+            }))
+            .await
+            .expect("set control");
+        assert!(matches!(control_rx.try_recv(), Ok(GeneratorEvent::Set(1234))));
+
+        service
+            .control(Request::new(ControlRequest {
+                kind: Some(Kind::Suspend(SuspendControl {})),
+            }))
+            .await
+            .expect("suspend control");
+        assert!(matches!(control_rx.try_recv(), Ok(GeneratorEvent::Suspend)));
+
+        // Generator control never touches the run flag.
+        assert!(is_running.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn control_stop_flips_run_flag() {
+        let (service, mut control_rx, is_running) = service();
+
+        service
+            .control(Request::new(ControlRequest {
+                kind: Some(Kind::Stop(StopControl {})),
+            }))
+            .await
+            .expect("stop control");
+
+        // Stop is not a generator event: it acts on the run flag directly.
+        assert!(!is_running.load(Ordering::SeqCst));
+        assert!(control_rx.try_recv().is_err());
     }
 }

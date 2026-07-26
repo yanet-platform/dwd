@@ -1,9 +1,11 @@
-//! The composition root: wires the core engine, the in-process gRPC seam, and
-//! the TUI client together into the single bundled process.
+//! The composition root: wires the core engine, the gRPC seam (in-process for
+//! the TUI, optionally on a network address for remote clients), and the TUI
+//! client together into the single bundled process.
 //!
 //! This is the only place that knows about *both* the core (server) and the TUI
 //! (client). The boundary between them is the [`dwd_proto`] gRPC contract: the
-//! TUI never touches the engine directly.
+//! TUI never touches the engine directly, and remote clients get the exact same
+//! API over `--grpc-addr`.
 
 use core::{
     future,
@@ -69,22 +71,44 @@ impl Runtime {
         };
 
         // The control channel that `run_generator` polls; the gRPC `Control`
-        // handler is now the only writer (the TUI reaches it through the API).
+        // handler is now the only writer (the TUI and remote clients both reach
+        // it through the API).
         let (control_tx, control_rx) = mpsc::channel::<dwd_core::GeneratorEvent>(1);
 
-        // The client half of the process exists only when the TUI runs. Headless
-        // (`--no-ui`) there is no client to serve, so the in-process gRPC seam is
-        // not stood up at all, and shutdown comes from process signals instead of
-        // the UI loop.
-        let seam = if self.cfg.no_ui {
+        // The single service instance behind every transport: the in-memory TUI
+        // seam and the network endpoint are the same API over the same core.
+        // Fully headless (no TUI, no `--grpc-addr`) there is no client at all,
+        // so no service is stood up and the control channel closes.
+        let service = if self.cfg.no_ui && self.cfg.grpc_addr.is_none() {
             drop(control_tx);
+            None
+        } else {
+            Some(DwdService::new(
+                control_tx,
+                snapshot_source,
+                descriptor,
+                self.is_running.clone(),
+            ))
+        };
+
+        // The network gRPC endpoint gives remote clients full control over the
+        // run (set / suspend / resume / stop + the stats stream). Bound eagerly
+        // so a bad address fails the run instead of a background task.
+        let grpc_handle = match (self.cfg.grpc_addr, &service) {
+            (Some(addr), Some(service)) => Some(dwd_core::grpc::serve_tcp(service.clone(), addr).await?.1),
+            _ => None,
+        };
+
+        // Headless runs have no UI loop to translate key presses into shutdown,
+        // so process signals take that role instead.
+        let seam = if self.cfg.no_ui {
             self.spawn_signal_handler();
 
             None
         } else {
             // Stand up the in-process gRPC server over the core and connect a client
             // over the same in-memory pipe — no OS socket is opened.
-            let service = DwdService::new(control_tx, snapshot_source, descriptor, self.is_running.clone());
+            let service = service.clone().expect("service exists whenever the TUI runs");
             let (client_io, server_io) = tokio::io::duplex(DUPLEX_BUFFER);
             let server_handle = dwd_core::grpc::serve(service, server_io);
             let grpc_client = client::connect(client_io)?;
@@ -148,6 +172,9 @@ impl Runtime {
         // lands on a clean stderr.
         summary.finish().log();
 
+        if let Some(handle) = grpc_handle {
+            handle.abort();
+        }
         if let Some(handle) = api_handle {
             handle.abort();
         }

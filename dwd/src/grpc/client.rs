@@ -379,4 +379,71 @@ mod tests {
         is_running.store(false, Ordering::SeqCst);
         server.abort();
     }
+
+    /// Exercises the network endpoint (`--grpc-addr`) over a real TCP socket:
+    /// remote control (set + stop) must behave exactly like the in-process
+    /// seam, including flipping the shared run flag on stop.
+    #[tokio::test]
+    async fn network_endpoint_roundtrip() {
+        use core::sync::atomic::{AtomicBool, Ordering};
+
+        use dwd_core::grpc::{DwdService, EngineDescriptor, SnapshotSource};
+        use dwd_proto::{control_request::Kind, ControlRequest, DescribeRequest, SetControl, StopControl};
+
+        struct FixedSource;
+        impl SnapshotSource for FixedSource {
+            fn snapshot(&self) -> StatsSnapshot {
+                StatsSnapshot::default()
+            }
+        }
+
+        let (control_tx, mut control_rx) = tokio::sync::mpsc::channel::<GeneratorEvent>(1);
+        let descriptor = EngineDescriptor {
+            engine_kind: "http",
+            groups: vec![StatGroup::Common, StatGroup::Http],
+        }
+        .into_response();
+        let is_running = Arc::new(AtomicBool::new(true));
+        let service = DwdService::new(control_tx, Arc::new(FixedSource), descriptor, is_running.clone());
+
+        let (addr, server) = dwd_core::grpc::serve_tcp(service, "127.0.0.1:0".parse().expect("loopback"))
+            .await
+            .expect("bind the network endpoint");
+
+        let channel = Endpoint::try_from(format!("http://{addr}"))
+            .expect("endpoint uri")
+            .connect()
+            .await
+            .expect("connect over TCP");
+        let mut client = DwdClient::new(channel);
+
+        // The remote client sees the same engine description as the TUI.
+        let described = client
+            .describe(DescribeRequest {})
+            .await
+            .expect("describe")
+            .into_inner();
+        assert_eq!(described.engine_kind, "http");
+
+        // Remote load control reaches the generator's control channel.
+        client
+            .control(ControlRequest {
+                kind: Some(Kind::Set(SetControl { rps: 9000 })),
+            })
+            .await
+            .expect("set control");
+        let event = control_rx.recv().await.expect("control event delivered");
+        assert!(matches!(event, GeneratorEvent::Set(9000)));
+
+        // Remote stop shuts the run down gracefully via the shared flag.
+        client
+            .control(ControlRequest {
+                kind: Some(Kind::Stop(StopControl {})),
+            })
+            .await
+            .expect("stop control");
+        assert!(!is_running.load(Ordering::SeqCst));
+
+        server.abort();
+    }
 }

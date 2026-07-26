@@ -40,6 +40,15 @@ pub struct Cmd {
     /// to observe the generator state and metrics.
     #[clap(long, global = true, value_name = "IP:PORT")]
     pub api_addr: Option<SocketAddr>,
+    /// Address to expose the gRPC control API on.
+    ///
+    /// When specified, serves the same `dwd.v1.Dwd` gRPC service the built-in
+    /// TUI uses, so remote clients get full control over the run: set the RPS,
+    /// suspend/resume the generator, stop the run and stream live statistics.
+    /// Server reflection is enabled, so `grpcurl` works without proto files.
+    /// Combine with `--no-ui` to drive a headless run entirely over the API.
+    #[clap(long, global = true, value_name = "IP:PORT")]
+    pub grpc_addr: Option<SocketAddr>,
     /// Run headless, without the interactive TUI.
     ///
     /// The load runs until the profile is exhausted or the process receives
