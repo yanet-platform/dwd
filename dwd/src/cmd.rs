@@ -40,6 +40,13 @@ pub struct Cmd {
     /// to observe the generator state and metrics.
     #[clap(long, global = true, value_name = "IP:PORT")]
     pub api_addr: Option<SocketAddr>,
+    /// Run headless, without the interactive TUI.
+    ///
+    /// The load runs until the profile is exhausted or the process receives
+    /// SIGINT (Ctrl-C) or SIGTERM. Combine with `--api-addr` to keep observing
+    /// the generator state and metrics.
+    #[clap(long, global = true)]
+    pub no_ui: bool,
 }
 
 #[derive(Debug, Clone, Parser)]

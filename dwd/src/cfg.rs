@@ -22,6 +22,8 @@ pub struct Config {
     pub generator_fn: BoxedGeneratorNew,
     /// Address to expose the Prometheus API on.
     pub api_addr: Option<SocketAddr>,
+    /// Run headless, without the interactive TUI.
+    pub no_ui: bool,
 }
 
 impl TryFrom<Cmd> for Config {
@@ -30,6 +32,7 @@ impl TryFrom<Cmd> for Config {
     fn try_from(v: Cmd) -> Result<Self, Self::Error> {
         let mode = v.mode.into_config()?;
         let api_addr = v.api_addr;
+        let no_ui = v.no_ui;
         let generator_fn = {
             let path = v.generator.clone();
 
@@ -46,6 +49,6 @@ impl TryFrom<Cmd> for Config {
             }))
         };
 
-        Ok(Self { mode, generator_fn, api_addr })
+        Ok(Self { mode, generator_fn, api_addr, no_ui })
     }
 }
