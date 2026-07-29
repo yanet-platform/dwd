@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+# Create a dedicated system user/group for the service.
+if ! getent group dwd-backend >/dev/null; then
+    addgroup --system dwd-backend
+fi
+if ! getent passwd dwd-backend >/dev/null; then
+    adduser --system --no-create-home --ingroup dwd-backend --home /nonexistent --shell /usr/sbin/nologin dwd-backend
+fi
+
+# Systemd unit handling (unit ships in /lib/systemd/system for compatibility
+# with older deb-systemd-helper, which does not search /usr/lib).
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+    # This will only remove masks created by d-s-h on package removal.
+    deb-systemd-helper unmask dwd-backend.service >/dev/null || true
+
+    # was-enabled defaults to true, so new installations run enable.
+    if deb-systemd-helper --quiet was-enabled dwd-backend.service; then
+        # Enables the unit on first installation, creates new
+        # symlinks on upgrades if the unit file has changed.
+        deb-systemd-helper enable dwd-backend.service >/dev/null || true
+    else
+        # Update the statefile to add new symlinks (if any), which need to be
+        # cleaned up on purge. Also remove old symlinks.
+        deb-systemd-helper update-state dwd-backend.service >/dev/null || true
+    fi
+
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || true
+        if [ -n "$2" ]; then
+            deb-systemd-invoke try-restart dwd-backend.service >/dev/null || true
+        fi
+    fi
+fi
+
+exit 0

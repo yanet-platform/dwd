@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi
+
+if [ "$1" = "remove" ]; then
+    if [ -x "/usr/bin/deb-systemd-helper" ]; then
+        deb-systemd-helper mask dwd-backend.service >/dev/null || true
+    fi
+fi
+
+if [ "$1" = "purge" ]; then
+    if [ -x "/usr/bin/deb-systemd-helper" ]; then
+        deb-systemd-helper purge dwd-backend.service >/dev/null || true
+        deb-systemd-helper unmask dwd-backend.service >/dev/null || true
+    fi
+
+    # On purge, remove the dedicated user/group.
+    if getent passwd dwd-backend >/dev/null; then
+        deluser --system dwd-backend || true
+    fi
+    if getent group dwd-backend >/dev/null; then
+        delgroup --system dwd-backend || true
+    fi
+fi
+
+exit 0

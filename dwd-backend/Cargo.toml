@@ -1,0 +1,63 @@
+[package]
+    authors     = ["esafronov@yandex-team.ru", "ezhichek@yandex-team.ru"]
+    description = "Simple HTTP/HTTPS/HTTP3 server serving static content"
+    edition     = "2021"
+    license     = "MIT"
+    name        = "dwd-backend"
+    version     = "0.1.0"
+
+[[bin]]
+    name = "dwd-backend"
+    path = "src/main.rs"
+
+[[example]]
+    name = "h3_client"
+    path = "example/h3_client.rs"
+
+[features]
+    jemalloc = ["jemallocator"]
+
+[profile.release]
+    codegen-units = 1
+    lto           = true
+    panic         = "abort"
+    strip         = true
+
+[dependencies]
+    # Default features off: compression, cookies, and unicode routing are unused
+    # here and only add dependencies and binary size.
+    actix-web      = { version = "4", default-features = false, features = ["macros", "rustls-0_23"] }
+    bytes          = "1"
+    clap           = { version = "4", features = ["derive"] }
+    h3             = "0.0.8"
+    h3-quinn       = "0.0.10"
+    http           = "1"
+    jemallocator   = { version = "0.5", optional = true }
+    quinn          = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+    rcgen          = "0.13"
+    rustls         = { version = "0.23", features = ["ring"] }
+    rustls-pemfile = "2"
+    serde          = { version = "1", features = ["derive"] }
+    tokio          = { version = "1", features = ["macros", "rt-multi-thread"] }
+    toml           = "0.8"
+
+    [package.metadata.deb]
+        assets = [
+            ["target/release/dwd-backend", "usr/bin/", "755"],
+            ["pkg/config.toml", "etc/dwd-backend/config.toml", "644"],
+            # Installed to /lib (not /usr/lib) because deb-systemd-helper on older
+            # hosts only searches /etc/systemd/system and /lib/systemd/system.
+            ["pkg/dwd-backend.service", "lib/systemd/system/", "644"],
+            ["example/README.md", "usr/share/doc/dwd-backend/README", "644"],
+        ]
+        changelog = "pkg/changelog"
+        conf-files = ["/etc/dwd-backend/config.toml"]
+        copyright = "2026, YANDEX LLC"
+        extended-description = """\
+dwd-backend is a small HTTP server that serves content from a file or a hardcoded \
+string over HTTP, HTTPS, and HTTP/3 (QUIC) simultaneously."""
+        maintainer = "ezhichek@yandex-team.ru"
+        maintainer-scripts = "pkg/"
+        priority = "optional"
+        revision = "3"
+        section = "net"
