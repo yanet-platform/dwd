@@ -6,7 +6,9 @@ members = ["dwd", "dwd-core", "dwd-proto"]
 # `dpdk` feature is enabled (it needs DPDK 24.11 headers). Excluding it keeps it
 # out of the default workspace build so `cargo check`/rust-analyzer don't try to
 # compile it without DPDK installed.
-exclude = ["dpdk"]
+# dwd-backend stays standalone because it has its own lockfile, release profile,
+# and Debian package target paths.
+exclude = ["dpdk", "dwd-backend"]
 
 [profile.release]
 panic = "abort"

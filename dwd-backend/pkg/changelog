@@ -1,0 +1,19 @@
+dwd-backend (0.1.0-3) unstable; urgency=medium
+
+  * Rename the project to dwd-backend and reorganize the server internals.
+
+ -- ezhichek <ezhichek@yandex-team.ru>  Wed, 29 Jul 2026 17:03:59 +0300
+
+
+dwd-backend (0.1.0-2) unstable; urgency=medium
+
+  * Install systemd unit to /lib/systemd/system instead of /usr/lib/systemd/system:
+    deb-systemd-helper on older hosts does not search /usr/lib, breaking package installation.
+
+ -- ezhichek <ezhichek@yandex-team.ru>  Fri, 24 Jul 2026 12:15:46 +0000
+
+dwd-backend (0.1.0-1) unstable; urgency=medium
+
+  * Initial release.
+
+ -- ezhichek <ezhichek@yandex-team.ru>  Wed, 22 Jul 2026 00:00:00 +0000

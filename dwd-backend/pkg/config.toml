@@ -1,0 +1,29 @@
+# dwd-backend configuration
+# See /usr/share/doc/dwd-backend for details.
+
+# Global listen address for all protocols ("::" — all IPv6/IPv4, "0.0.0.0" — IPv4)
+address = "::"
+
+[http]
+    port = 80
+
+# HTTPS is enabled by default. If cert and key are not set,
+# a temporary in-memory certificate is generated.
+[https]
+    port = 443
+    # enabled = false
+    # cert = "/etc/dwd-backend/cert.pem"
+    # key = "/etc/dwd-backend/key.pem"
+
+# HTTP/3 is enabled by default and does not require [https]
+# (reuses the [https] certificate or generates its own).
+[http3]
+    port = 443
+    # enabled = false
+    # cert = "/etc/dwd-backend/cert.pem"
+    # key = "/etc/dwd-backend/key.pem"
+
+# Content to serve
+[content]
+    file    = "/etc/dwd-backend/content"
+    payload = "default content"
