@@ -18,77 +18,150 @@ concurrency:
 jobs:
   # Fast checks - run in parallel for quick feedback.
   format:
-    name: Format
+    name: Format (${{ matrix.project }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - project: dwd
+            directory: .
+          - project: dwd-backend
+            directory: dwd-backend
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - name: Check formatting
+        working-directory: ${{ matrix.directory }}
         run: cargo fmt --all -- --check
 
   clippy:
-    name: Clippy
+    name: Clippy (${{ matrix.project }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - project: dwd
+            directory: .
+            features: ''
+          - project: dwd-backend
+            directory: dwd-backend
+            features: jemalloc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.project }}
+          workspaces: ${{ matrix.directory }} -> target
       - name: Run clippy
-        run: cargo clippy -p dwd --all-targets -- -D warnings
+        working-directory: ${{ matrix.directory }}
+        run: cargo clippy --workspace --all-targets --locked --features "${{ matrix.features }}" -- -D warnings
 
   check:
-    name: Check
+    name: Check (${{ matrix.project }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - project: dwd
+            directory: .
+            features: ''
+          - project: dwd-backend
+            directory: dwd-backend
+            features: jemalloc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.project }}
+          workspaces: ${{ matrix.directory }} -> target
       - name: Run cargo check
-        run: cargo check -p dwd --all-targets
+        working-directory: ${{ matrix.directory }}
+        run: cargo check --workspace --all-targets --locked --features "${{ matrix.features }}"
 
   # MSRV check.
   msrv:
-    name: MSRV (1.96)
+    name: MSRV 1.96 (${{ matrix.project }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - project: dwd
+            directory: .
+            features: ''
+          - project: dwd-backend
+            directory: dwd-backend
+            features: jemalloc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.96"
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.project }}
+          workspaces: ${{ matrix.directory }} -> target
       - name: Check MSRV
-        run: cargo check -p dwd
+        working-directory: ${{ matrix.directory }}
+        run: cargo check --workspace --locked --features "${{ matrix.features }}"
 
   # Tests - run after format/clippy/check pass.
   test:
-    name: Test
+    name: Test (${{ matrix.project }})
     runs-on: ubuntu-latest
     needs: [format, clippy, check]
+    strategy:
+      matrix:
+        include:
+          - project: dwd
+            directory: .
+            features: ''
+          - project: dwd-backend
+            directory: dwd-backend
+            features: jemalloc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.project }}
+          workspaces: ${{ matrix.directory }} -> target
       - name: Run tests
-        run: cargo test -p dwd --all-targets
+        working-directory: ${{ matrix.directory }}
+        run: cargo test --workspace --all-targets --locked --features "${{ matrix.features }}"
 
   # Build without DPDK - for platforms where DPDK is not available.
   build:
-    name: Build (no DPDK)
+    name: Build (${{ matrix.project }})
     runs-on: ubuntu-latest
     needs: [format, clippy, check]
+    strategy:
+      matrix:
+        include:
+          - project: dwd
+            directory: .
+            features: ''
+          - project: dwd-backend
+            directory: dwd-backend
+            features: jemalloc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.project }}
+          workspaces: ${{ matrix.directory }} -> target
       - name: Build release
-        run: cargo build -p dwd --release
+        working-directory: ${{ matrix.directory }}
+        run: cargo build --workspace --release --locked --features "${{ matrix.features }}"
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-linux-x86_64
-          path: target/release/dwd
+          name: ${{ matrix.project }}-linux-x86_64
+          path: ${{ matrix.directory }}/target/release/${{ matrix.project }}
           if-no-files-found: error

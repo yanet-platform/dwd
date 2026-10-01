@@ -1,4 +1,5 @@
-FROM ubuntu:18.04 AS builder
+ARG UBUNTU_VERSION=24.04
+FROM ubuntu:${UBUNTU_VERSION} AS builder
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 

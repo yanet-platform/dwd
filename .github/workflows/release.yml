@@ -145,59 +145,17 @@ jobs:
           path: dist/*.deb
           if-no-files-found: error
 
-  build-backend-compat:
-    name: Build Backend with jemalloc (Ubuntu 18.04 compat)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set release version from tag
-        run: |
-          release_version="${GITHUB_REF_NAME#v}"
-          echo "DWD_VERSION=$release_version" >> "$GITHUB_ENV"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build backend Docker image (Ubuntu 18.04)
-        uses: docker/build-push-action@v6
-        with:
-          context: ./dwd-backend
-          file: dwd-backend/Dockerfile.ubuntu18
-          push: false
-          tags: dwd-backend:release-build-compat
-          build-args: DWD_VERSION=${{ env.DWD_VERSION }}
-          load: true
-          cache-from: type=gha,scope=backend-ubuntu18
-          cache-to: type=gha,mode=max,scope=backend-ubuntu18
-
-      - name: Extract backend artifacts from Docker image
-        run: |
-          container_id=$(docker create dwd-backend:release-build-compat)
-          mkdir -p dist
-          docker cp "$container_id:/src/target/x86_64-unknown-linux-gnu/release/dwd-backend" dist/dwd-backend
-          docker cp "$container_id:/src/target/debian/." dist/
-          docker rm "$container_id"
-
-      - name: Upload backend binary (compat)
-        uses: actions/upload-artifact@v4
-        with:
-          name: dwd-backend-linux-x86_64-compat
-          path: dist/dwd-backend
-          if-no-files-found: error
-
-      - name: Upload backend Debian package (compat)
-        uses: actions/upload-artifact@v4
-        with:
-          name: dwd-backend-debian-package-compat
-          path: dist/*.deb
-          if-no-files-found: error
+  build-backend:
+    name: Build Backend
+    uses: ./.github/workflows/backend.yml
+    with:
+      release-tag: ${{ github.ref_name }}
 
   # Create GitHub release with all artifacts.
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-binary, build-dpdk, build-dpdk-compat, build-backend-compat]
+    needs: [build-binary, build-dpdk, build-dpdk-compat, build-backend]
     permissions:
       contents: write
     steps:
@@ -222,12 +180,17 @@ jobs:
           # DPDK binary (Ubuntu 18.04 compat, GLIBC 2.27).
           cp artifacts/dwd-dpdk-linux-x86_64-compat/dwd-dpdk-compat release/dwd-dpdk-linux-x86_64-compat
           
+          cp artifacts/dwd-backend-linux-x86_64/dwd-backend release/dwd-backend-linux-x86_64
           cp artifacts/dwd-backend-linux-x86_64-compat/dwd-backend release/dwd-backend-linux-x86_64-compat
 
           # Debian packages.
           cp artifacts/dwd-debian-package/*.deb release/
           cp artifacts/dwd-debian-package-compat/*.deb release/
-          cp artifacts/dwd-backend-debian-package-compat/*.deb release/
+          cp artifacts/dwd-backend-debian-package/*.deb release/
+          for package in artifacts/dwd-backend-debian-package-compat/*.deb; do
+            package_name=$(basename "$package" .deb)
+            cp "$package" "release/${package_name}-compat.deb"
+          done
           
           # Create checksums.
           cd release
