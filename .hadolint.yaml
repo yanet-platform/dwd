@@ -1,0 +1,6 @@
+ignored:
+  # APT and pip packages use the versions available in their repositories.
+  - DL3008
+  - DL3013
+  # Separate RUN layers preserve dependency and toolchain build caches.
+  - DL3059

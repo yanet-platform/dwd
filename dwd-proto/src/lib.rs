@@ -4,6 +4,7 @@
 //! load-generating core. It contains only the generated wire types plus the
 //! tonic client/server stubs — no engine, stats, or transport logic.
 
+#[allow(clippy::double_must_use)]
 pub mod pb {
     //! Generated protobuf/tonic items for the `dwd.v1` package.
     tonic::include_proto!("dwd.v1");

@@ -1,15 +1,20 @@
 FROM ubuntu:24.04 AS builder
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 ENV DPDK_VERSION=24.11
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt update -y
-
 # Setup dependencies:
 # - curl - for downloading DPDK.
 # - tar, xz-utils - for extracting DPDK.
-RUN apt install -y curl tar xz-utils
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    tar \
+    xz-utils && \
+    rm -rf /var/lib/apt/lists/*
 
 # Download and unpack DPDK.
 RUN mkdir -p /build/dpdk
@@ -24,21 +29,23 @@ RUN tar -xvJf dpdk-${DPDK_VERSION}.tar.xz -C dpdk --strip-components=1
 # - meson, ninja-build - build system.
 # - pkg-config - helps DPDK to find dependencies.
 # - python3-pyelftools - for whatever DPDK reasons.
-RUN apt install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
     libclang-dev \
     make \
     meson \
     ninja-build \
     pkg-config \
-    python3-pyelftools
+    python3-pyelftools && \
+    rm -rf /var/lib/apt/lists/*
 
 # MLX5 dependencies (dynamic linking required due to GPL license).
-RUN apt install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libnuma-dev \
     libmlx5-1 \
     libibverbs1 \
-    libibverbs-dev
+    libibverbs-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 # Build DPDK with static libraries.
 WORKDIR /build/dpdk
@@ -66,7 +73,7 @@ RUN rm -rf /build/dpdk /build/*.tar.xz
 # the (slow) DPDK source-build cache layers above.
 ENV RUST_VERSION=1.96
 RUN curl -f -sSf https://sh.rustup.rs | bash -s -- -y --default-toolchain none
-RUN /root/.cargo/bin/rustup toolchain install $RUST_VERSION --profile minimal -c clippy -c rustfmt
+RUN /root/.cargo/bin/rustup toolchain install "$RUST_VERSION" --profile minimal -c clippy -c rustfmt
 
 # Install cargo-deb for debian package building.
 RUN /root/.cargo/bin/cargo install cargo-deb
@@ -86,4 +93,12 @@ RUN /root/.cargo/bin/cargo build --release --features=dpdk
 RUN /root/.cargo/bin/cargo clippy --features=dpdk -- -D warnings
 
 # Build debian package.
-RUN /root/.cargo/bin/cargo deb -p dwd --no-build
+ARG DWD_VERSION
+RUN set -- && \
+    if [ -n "$DWD_VERSION" ]; then \
+        release_version="${DWD_VERSION%%+*}"; \
+        build_metadata="${DWD_VERSION#"$release_version"}"; \
+        deb_version=$(printf '%s' "$release_version" | sed 's/-/~/'); \
+        set -- --deb-version "${deb_version}${build_metadata}"; \
+    fi && \
+    /root/.cargo/bin/cargo deb -p dwd --no-build "$@"
