@@ -25,6 +25,17 @@ The binary is `target/{debug,release}/dwd-backend`. The release profile enables
 fat LTO, a single codegen unit, abort-on-panic, and symbol stripping
 (`[profile.release]` in `Cargo.toml`) for a faster and smaller binary.
 
+GitHub releases include `dwd-backend-linux-x86_64-compat` and a Debian package,
+built on Ubuntu 18.04 with statically linked glibc and jemalloc. Release package
+versions follow the Git tag without its leading `v`. To build the same artifacts
+locally from the repository root:
+
+```sh
+docker build -f dwd-backend/Dockerfile.ubuntu18 dwd-backend
+```
+
+Pass `--build-arg DWD_VERSION=0.8.0` to override the package version locally.
+
 ### Static musl build
 
 Produces a fully static binary with no dynamic dependencies:
