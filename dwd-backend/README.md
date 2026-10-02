@@ -25,9 +25,10 @@ The binary is `target/{debug,release}/dwd-backend`. The release profile enables
 fat LTO, a single codegen unit, abort-on-panic, and symbol stripping
 (`[profile.release]` in `Cargo.toml`) for a faster and smaller binary.
 
-GitHub releases include binaries and Debian packages built on Ubuntu 24.04 and
-18.04 with statically linked glibc and jemalloc. Ubuntu 18.04 artifacts have a
-`-compat` suffix; package versions follow the Git tag without its leading `v`.
+GitHub releases include binaries and Debian packages built on Ubuntu 24.04
+(Noble) and 18.04 (Bionic) with statically linked glibc and jemalloc. Artifacts
+have a `-noble` or `-bionic` suffix respectively, before `.deb` for packages;
+package versions follow the Git tag without its leading `v`.
 To build the same artifacts locally from the repository root:
 
 ```sh
