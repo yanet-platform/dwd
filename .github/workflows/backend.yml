@@ -21,16 +21,16 @@ concurrency:
 
 jobs:
   build:
-    name: Build Backend (Ubuntu ${{ matrix.ubuntu }})
+    name: Build Backend (Ubuntu ${{ matrix.ubuntu }}${{ matrix.suffix }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - ubuntu: '24.04'
-            suffix: ''
+            suffix: '-noble'
           - ubuntu: '18.04'
-            suffix: '-compat'
+            suffix: '-bionic'
     steps:
       - uses: actions/checkout@v4
 

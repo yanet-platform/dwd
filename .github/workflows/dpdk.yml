@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dpdk-build:
-    name: Build with DPDK 24.11
+  dpdk-build-noble:
+    name: Build with DPDK 24.11 (Ubuntu 24.04 Noble)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
         with:
           context: .
           push: false
-          tags: dwd:dpdk-build
+          tags: dwd:dpdk-build-noble
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -37,7 +37,7 @@ jobs:
       - name: Extract artifacts from Docker image
         run: |
           # Create container from image.
-          CONTAINER_ID=$(docker create dwd:dpdk-build)
+          CONTAINER_ID=$(docker create dwd:dpdk-build-noble)
           
           # Create output directory.
           mkdir -p dist
@@ -55,20 +55,20 @@ jobs:
       - name: Upload DPDK binary
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-dpdk-linux-x86_64
+          name: dwd-dpdk-linux-x86_64-noble
           path: dist/dwd-dpdk
           if-no-files-found: error
 
       - name: Upload debian package
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-debian-package
+          name: dwd-debian-package-noble
           path: dist/*.deb
           if-no-files-found: error
 
-  # Build DPDK-enabled binary for Ubuntu 18.04 (GLIBC 2.27, max compatibility).
-  dpdk-build-compat:
-    name: Build with DPDK 24.11 (Ubuntu 18.04 compat)
+  # Build DPDK-enabled binary for Ubuntu 18.04 Bionic (GLIBC 2.27).
+  dpdk-build-bionic:
+    name: Build with DPDK 24.11 (Ubuntu 18.04 Bionic)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +82,7 @@ jobs:
           context: .
           file: Dockerfile.ubuntu18
           push: false
-          tags: dwd:dpdk-build-compat
+          tags: dwd:dpdk-build-bionic
           load: true
           cache-from: type=gha,scope=ubuntu18
           cache-to: type=gha,mode=max,scope=ubuntu18
@@ -90,13 +90,13 @@ jobs:
       - name: Extract artifacts from Docker image
         run: |
           # Create container from image.
-          CONTAINER_ID=$(docker create dwd:dpdk-build-compat)
+          CONTAINER_ID=$(docker create dwd:dpdk-build-bionic)
 
           # Create output directory.
           mkdir -p dist
 
           # Copy binary from container.
-          docker cp $CONTAINER_ID:/src/target/release/dwd dist/dwd-dpdk-compat
+          docker cp $CONTAINER_ID:/src/target/release/dwd dist/dwd-dpdk-bionic
 
           # Copy bundled debian package (with rdma-core libs) from /src/dist/.
           docker cp $CONTAINER_ID:/src/dist/. dist/
@@ -107,16 +107,16 @@ jobs:
           # List artifacts.
           ls -la dist/
 
-      - name: Upload DPDK binary (compat)
+      - name: Upload DPDK binary (Bionic)
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-dpdk-linux-x86_64-compat
-          path: dist/dwd-dpdk-compat
+          name: dwd-dpdk-linux-x86_64-bionic
+          path: dist/dwd-dpdk-bionic
           if-no-files-found: error
 
-      - name: Upload debian package (compat)
+      - name: Upload debian package (Bionic)
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-debian-package-compat
+          name: dwd-debian-package-bionic
           path: dist/*.deb
           if-no-files-found: error

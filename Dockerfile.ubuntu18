@@ -174,4 +174,4 @@ RUN DEB_VERSION=$(dpkg-deb --field /src/target/debian/dwd_*.deb Version) && \
         'Description: DWD with bundled DPDK and rdma-core libs' \
         ' Includes libibverbs and libmlx5 for compatibility with older systems.' \
         > /src/dist/dwd-dpdk-bundle/DEBIAN/control && \
-    dpkg-deb --build /src/dist/dwd-dpdk-bundle "/src/dist/dwd_${DEB_VERSION}-dpdk_amd64.deb"
+    dpkg-deb --build /src/dist/dwd-dpdk-bundle "/src/dist/dwd_${DEB_VERSION}_amd64.deb"

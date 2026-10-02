@@ -8,6 +8,18 @@ There are two operating modes that are fundamentally different from each other i
 
 Let's consider both modes in more detail.
 
+## Release packages
+
+GitHub releases provide binaries and Debian packages for Ubuntu 24.04 (Noble)
+and Ubuntu 18.04 (Bionic), named with `-noble` and `-bionic` suffixes respectively.
+For example, the DPDK packages are `dwd_<version>_amd64-noble.deb` and
+`dwd_<version>_amd64-bionic.deb`. The Bionic package bundles `libibverbs` and
+`libmlx5` for older systems; the Noble package uses the system libraries.
+
+The standalone binary without DPDK is `dwd-linux-x86_64-noble`. The DPDK binaries
+are `dwd-dpdk-linux-x86_64-noble` and `dwd-dpdk-linux-x86_64-bionic`.
+[Backend](dwd-backend/README.md) artifacts use the same codename suffixes.
+
 ## TL/DR examples
 
 #### Load 16'000'000 UDP packets per second on 40 CPU cores
