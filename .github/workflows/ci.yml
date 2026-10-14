@@ -137,11 +137,17 @@ jobs:
 
   # Build without DPDK - for platforms where DPDK is not available.
   build:
-    name: Build (${{ matrix.project }}, Ubuntu 24.04 Noble)
-    runs-on: ubuntu-24.04
+    name: Build (${{ matrix.project }}, Ubuntu ${{ matrix.ubuntu.version }} ${{ matrix.ubuntu.codename }})
+    runs-on: ubuntu-${{ matrix.ubuntu.version }}
     needs: [format, clippy, check]
     strategy:
       matrix:
+        project: [dwd, dwd-backend]
+        ubuntu:
+          - version: '24.04'
+            codename: noble
+          - version: '22.04'
+            codename: jammy
         include:
           - project: dwd
             directory: .
@@ -154,7 +160,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.project }}
+          key: ${{ matrix.project }}-${{ matrix.ubuntu.codename }}
           workspaces: ${{ matrix.directory }} -> target
       - name: Build release
         working-directory: ${{ matrix.directory }}
@@ -162,6 +168,6 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.project }}-linux-x86_64-noble
+          name: ${{ matrix.project }}-linux-x86_64-${{ matrix.ubuntu.codename }}
           path: ${{ matrix.directory }}/target/release/${{ matrix.project }}
           if-no-files-found: error
