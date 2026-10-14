@@ -11,25 +11,41 @@ env:
 jobs:
   # Build release binary without DPDK.
   build-binary:
-    name: Build Binary (Ubuntu 24.04 Noble, no DPDK)
-    runs-on: ubuntu-24.04
+    name: Build Binary (Ubuntu ${{ matrix.ubuntu }} ${{ matrix.codename }}, no DPDK)
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    strategy:
+      matrix:
+        include:
+          - ubuntu: '24.04'
+            codename: noble
+          - ubuntu: '22.04'
+            codename: jammy
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: dwd-${{ matrix.codename }}
       - name: Build release
         run: cargo build -p dwd --release
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-linux-x86_64-noble
+          name: dwd-linux-x86_64-${{ matrix.codename }}
           path: target/release/dwd
           if-no-files-found: error
 
-  # Build DPDK-enabled binary and debian package (Ubuntu 24.04 Noble, GLIBC 2.39).
-  build-dpdk-noble:
-    name: Build with DPDK (Ubuntu 24.04 Noble)
+  # Build DPDK-enabled binaries and debian packages for Noble and Jammy.
+  build-dpdk:
+    name: Build with DPDK (Ubuntu ${{ matrix.ubuntu }} ${{ matrix.codename }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - ubuntu: '24.04'
+            codename: noble
+          - ubuntu: '22.04'
+            codename: jammy
     steps:
       - uses: actions/checkout@v4
 
@@ -46,16 +62,18 @@ jobs:
         with:
           context: .
           push: false
-          tags: dwd:release-build-noble
-          build-args: DWD_VERSION=${{ env.DWD_VERSION }}
+          tags: dwd:release-build-${{ matrix.codename }}
+          build-args: |
+            UBUNTU_VERSION=${{ matrix.ubuntu }}
+            DWD_VERSION=${{ env.DWD_VERSION }}
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=dpdk-${{ matrix.codename }}
+          cache-to: type=gha,mode=max,scope=dpdk-${{ matrix.codename }}
 
       - name: Extract artifacts from Docker image
         run: |
           # Create container from image.
-          CONTAINER_ID=$(docker create dwd:release-build-noble)
+          CONTAINER_ID=$(docker create dwd:release-build-${{ matrix.codename }})
           
           # Create output directory.
           mkdir -p dist
@@ -73,14 +91,14 @@ jobs:
       - name: Upload DPDK binary
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-dpdk-linux-x86_64-noble
+          name: dwd-dpdk-linux-x86_64-${{ matrix.codename }}
           path: dist/dwd-dpdk
           if-no-files-found: error
 
       - name: Upload debian package
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-debian-package-noble
+          name: dwd-debian-package-${{ matrix.codename }}
           path: dist/*.deb
           if-no-files-found: error
 
@@ -155,7 +173,7 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-binary, build-dpdk-noble, build-dpdk-bionic, build-backend]
+    needs: [build-binary, build-dpdk, build-dpdk-bionic, build-backend]
     permissions:
       contents: write
     steps:
@@ -171,20 +189,25 @@ jobs:
         run: |
           mkdir -p release
           
-          # Regular binary (no DPDK).
+          # Regular binaries (no DPDK).
           cp artifacts/dwd-linux-x86_64-noble/dwd release/dwd-linux-x86_64-noble
+          cp artifacts/dwd-linux-x86_64-jammy/dwd release/dwd-linux-x86_64-jammy
           
           # DPDK binary (Ubuntu 24.04 Noble, GLIBC 2.39).
           cp artifacts/dwd-dpdk-linux-x86_64-noble/dwd-dpdk release/dwd-dpdk-linux-x86_64-noble
+
+          # DPDK binary (Ubuntu 22.04 Jammy, GLIBC 2.35).
+          cp artifacts/dwd-dpdk-linux-x86_64-jammy/dwd-dpdk release/dwd-dpdk-linux-x86_64-jammy
           
           # DPDK binary (Ubuntu 18.04 Bionic, GLIBC 2.27).
           cp artifacts/dwd-dpdk-linux-x86_64-bionic/dwd-dpdk-bionic release/dwd-dpdk-linux-x86_64-bionic
           
           cp artifacts/dwd-backend-linux-x86_64-noble/dwd-backend release/dwd-backend-linux-x86_64-noble
+          cp artifacts/dwd-backend-linux-x86_64-jammy/dwd-backend release/dwd-backend-linux-x86_64-jammy
           cp artifacts/dwd-backend-linux-x86_64-bionic/dwd-backend release/dwd-backend-linux-x86_64-bionic
 
           # Debian packages.
-          for codename in noble bionic; do
+          for codename in noble jammy bionic; do
             for package in artifacts/dwd-debian-package-"$codename"/*.deb \
                 artifacts/dwd-backend-debian-package-"$codename"/*.deb; do
               package_name=$(basename "$package" .deb)

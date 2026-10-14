@@ -10,14 +10,16 @@ Let's consider both modes in more detail.
 
 ## Release packages
 
-GitHub releases provide binaries and Debian packages for Ubuntu 24.04 (Noble)
-and Ubuntu 18.04 (Bionic), named with `-noble` and `-bionic` suffixes respectively.
-For example, the DPDK packages are `dwd_<version>_amd64-noble.deb` and
+GitHub releases provide binaries and Debian packages for Ubuntu 24.04 (Noble),
+22.04 (Jammy), and 18.04 (Bionic), named with `-noble`, `-jammy`, and `-bionic`
+suffixes respectively. For example, the DPDK packages are
+`dwd_<version>_amd64-noble.deb`, `dwd_<version>_amd64-jammy.deb`, and
 `dwd_<version>_amd64-bionic.deb`. The Bionic package bundles `libibverbs` and
-`libmlx5` for older systems; the Noble package uses the system libraries.
+`libmlx5` for older systems; the Noble and Jammy packages use the system libraries.
 
-The standalone binary without DPDK is `dwd-linux-x86_64-noble`. The DPDK binaries
-are `dwd-dpdk-linux-x86_64-noble` and `dwd-dpdk-linux-x86_64-bionic`.
+The standalone binaries without DPDK are `dwd-linux-x86_64-noble` and
+`dwd-linux-x86_64-jammy`. The DPDK binaries are `dwd-dpdk-linux-x86_64-noble`,
+`dwd-dpdk-linux-x86_64-jammy`, and `dwd-dpdk-linux-x86_64-bionic`.
 [Backend](dwd-backend/README.md) artifacts use the same codename suffixes.
 
 ## TL/DR examples
@@ -380,6 +382,8 @@ cargo build --release
 
 The binary will be available at `target/release/dwd`.
 
+CI builds native `dwd` and `dwd-backend` binaries on Ubuntu 24.04 and 22.04.
+
 ### DPDK-enabled Build (Linux Only)
 
 Building with DPDK support requires:
@@ -397,6 +401,19 @@ cargo build --release --features=dpdk
 ```
 
 The DPDK-enabled binary will be available at `target/release/dwd`.
+
+To build the DPDK binary and Debian package locally with the same Dockerfiles
+used for releases, run from the repository root:
+
+```bash
+docker build -t dwd:noble .
+docker build --build-arg UBUNTU_VERSION=22.04 -t dwd:jammy .
+docker build -f Dockerfile.ubuntu18 -t dwd:bionic .
+```
+
+The main Dockerfile defaults to Ubuntu 24.04. Pass
+`--build-arg DWD_VERSION=0.8.0` to override the package version locally;
+release package versions follow the Git tag without its leading `v`.
 
 ### Troubleshooting
 

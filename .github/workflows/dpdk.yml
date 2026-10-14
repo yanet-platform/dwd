@@ -15,9 +15,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dpdk-build-noble:
-    name: Build with DPDK 24.11 (Ubuntu 24.04 Noble)
+  dpdk-build:
+    name: Build with DPDK 24.11 (Ubuntu ${{ matrix.ubuntu }} ${{ matrix.codename }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - ubuntu: '24.04'
+            codename: noble
+          - ubuntu: '22.04'
+            codename: jammy
     steps:
       - uses: actions/checkout@v4
 
@@ -29,15 +36,16 @@ jobs:
         with:
           context: .
           push: false
-          tags: dwd:dpdk-build-noble
+          tags: dwd:dpdk-build-${{ matrix.codename }}
+          build-args: UBUNTU_VERSION=${{ matrix.ubuntu }}
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=dpdk-${{ matrix.codename }}
+          cache-to: type=gha,mode=max,scope=dpdk-${{ matrix.codename }}
 
       - name: Extract artifacts from Docker image
         run: |
           # Create container from image.
-          CONTAINER_ID=$(docker create dwd:dpdk-build-noble)
+          CONTAINER_ID=$(docker create dwd:dpdk-build-${{ matrix.codename }})
           
           # Create output directory.
           mkdir -p dist
@@ -55,14 +63,14 @@ jobs:
       - name: Upload DPDK binary
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-dpdk-linux-x86_64-noble
+          name: dwd-dpdk-linux-x86_64-${{ matrix.codename }}
           path: dist/dwd-dpdk
           if-no-files-found: error
 
       - name: Upload debian package
         uses: actions/upload-artifact@v4
         with:
-          name: dwd-debian-package-noble
+          name: dwd-debian-package-${{ matrix.codename }}
           path: dist/*.deb
           if-no-files-found: error
 

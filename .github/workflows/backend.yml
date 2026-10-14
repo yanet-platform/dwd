@@ -29,6 +29,8 @@ jobs:
         include:
           - ubuntu: '24.04'
             suffix: '-noble'
+          - ubuntu: '22.04'
+            suffix: '-jammy'
           - ubuntu: '18.04'
             suffix: '-bionic'
     steps:
