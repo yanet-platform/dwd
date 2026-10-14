@@ -11,6 +11,13 @@ on:
         description: Release tag used for Debian package versions
         type: string
         default: ''
+      source-ref:
+        description: Optional source commit to build instead of the triggering ref
+        type: string
+        default: ''
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,6 +42,8 @@ jobs:
             suffix: '-bionic'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source-ref }}
 
       - name: Set release version from tag
         env:
